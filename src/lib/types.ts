@@ -78,6 +78,8 @@ export interface PartReady {
 }
 
 export type WorkerOutMessage =
+  | { type: 'ALIVE' }
+  | { type: 'FFMPEG_READY' }
   | { type: 'READY' }
   | { type: 'META'; metadata: FileMetadata }
   | { type: 'PROGRESS'; progress: ExtractionProgress }

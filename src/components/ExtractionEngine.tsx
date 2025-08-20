@@ -1,26 +1,29 @@
-import { useState, useEffect, useRef } from 'react';
-import { Card } from '@/components/ui/card';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { X, Download, Pause, Play } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
+import { Download, Play, Square, AlertCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { estimateFramesAndZip } from '@/lib/estimate';
-import Diagnostics from './Diagnostics';
 import type { 
-  FileMetadata, 
   ExtractionSettings, 
+  FileMetadata, 
   ExtractedFrame, 
   ExtractionProgress,
   WorkerInMessage,
-  WorkerOutMessage 
+  WorkerOutMessage,
+  PartReady
 } from '@/lib/types';
+import { estimateFramesAndZip } from '@/lib/estimate';
+import Diagnostics from '@/components/Diagnostics';
+import FfmpegWorker from '@/workers/ffmpeg.worker?worker';
 
 interface ExtractionEngineProps {
   file: File | null;
   metadata?: FileMetadata;
   settings: ExtractionSettings;
-  onFramesExtracted: (frames: ExtractedFrame[]) => void;
-  onProgressUpdate: (progress: ExtractionProgress) => void;
+  onFramesExtracted?: (frames: ExtractedFrame[]) => void;
+  onProgressUpdate?: (progress: ExtractionProgress) => void;
 }
 
 export function ExtractionEngine({ 
@@ -37,204 +40,194 @@ export function ExtractionEngine({
     status: 'idle'
   });
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
-  const [workerReady, setWorkerReady] = useState(false);
-  const [generatedParts, setGeneratedParts] = useState<{ partIndex: number; totalParts: number; filename: string; url: string }[]>([]);
+  const [workerAlive, setWorkerAlive] = useState(false);
+  const [ffmpegReady, setFfmpegReady] = useState(false);
+  const [lastWorkerError, setLastWorkerError] = useState<string | null>(null);
+  const [generatedParts, setGeneratedParts] = useState<Array<{
+    partIndex: number;
+    totalParts: number;
+    startFrame: number;
+    endFrame: number;
+    filename: string;
+    blob: Blob;
+    url: string;
+  }>>([]);
+
   const workerRef = useRef<Worker | null>(null);
-  const workerReadyRef = useRef(false);
-  const readyPromiseRef = useRef<Promise<void> | null>(null);
-  const resolveReadyRef = useRef<() => void>(() => {});
+  const basePath = `${window.location.origin}${(import.meta as any).env?.BASE_URL ?? '/'}`.replace(/\/$/, '') + '/ffmpeg';
   const { toast } = useToast();
 
   // Initialize worker on mount
   useEffect(() => {
-    initializeWorker();
-    return () => {
-      // Clean up worker on unmount
-      if (workerRef.current) {
-        workerRef.current.terminate();
-      }
-      // Clean up frame URLs
-      frames.forEach(frame => URL.revokeObjectURL(frame.url));
-      // Clean up part URLs
-      generatedParts.forEach(part => URL.revokeObjectURL(part.url));
-    };
-  }, [frames, generatedParts]);
+    const worker = new FfmpegWorker();
+    workerRef.current = worker;
 
-  const initializeWorker = () => {
-    if (workerRef.current) {
-      workerRef.current.terminate();
-    }
-
-    workerReadyRef.current = false;
-    setWorkerReady(false);
-
-    workerRef.current = new Worker(
-      new URL('../lib/ffmpeg/worker.ts', import.meta.url),
-      { type: 'module' }
-    );
-
-    // Create a promise that resolves when we get READY
-    readyPromiseRef.current = new Promise<void>((resolve) => {
-      resolveReadyRef.current = resolve;
-    });
-
-    const basePath = `${window.location.origin}${(import.meta as any).env?.BASE_URL ?? '/'}`.replace(/\/$/, '') + '/ffmpeg';
-
-    workerRef.current.onmessage = (event: MessageEvent<WorkerOutMessage>) => {
+    worker.onmessage = (event: MessageEvent<WorkerOutMessage>) => {
       const { type } = event.data;
-      console.log('[ExtractionEngine] Worker message:', type);
-
+      
       switch (type) {
+        case 'ALIVE':
+          setWorkerAlive(true);
+          setLastWorkerError(null);
+          // Send INIT with absolute base path for core files
+          worker.postMessage({ type: 'INIT', basePath } as WorkerInMessage);
+          break;
+
+        case 'FFMPEG_READY':
+          setFfmpegReady(true);
+          break;
+
         case 'READY':
-          console.log('[ExtractionEngine] FFmpeg worker ready');
-          workerReadyRef.current = true;
-          setWorkerReady(true);
-          resolveReadyRef.current();
-          toast({
-            title: "FFmpeg Ready",
-            description: "Extraction engine initialized successfully."
-          });
+          // Legacy support - treat as FFMPEG_READY
+          setFfmpegReady(true);
           break;
 
         case 'META':
-          console.log('[ExtractionEngine] Metadata received:', event.data.metadata);
+          // Handle metadata if needed
           break;
 
         case 'PROGRESS':
-          const newProgress = event.data.progress;
-          console.log('[ExtractionEngine] Progress update:', newProgress);
-          setProgress(newProgress);
-          onProgressUpdate(newProgress);
+          setProgress((event.data as any).progress);
+          onProgressUpdate?.((event.data as any).progress);
           break;
 
         case 'FRAME':
-          const f = event.data.frame;
-          console.log('[ExtractionEngine] Frame received:', f.index);
-          const frameUrl = URL.createObjectURL(f.blob);
-          setFrames(prev => [...prev, { ...f, url: frameUrl }]);
+          setFrames(prev => [...prev, (event.data as any).frame]);
           break;
 
         case 'PART_READY':
-          const { partIndex, totalParts, filename, zip } = event.data;
-          const partUrl = URL.createObjectURL(zip);
-          setGeneratedParts(prev => [...prev, { partIndex, totalParts, filename, url: partUrl }]);
+          const partData = event.data as PartReady;
+          const partUrl = URL.createObjectURL(partData.zip);
+          
+          setGeneratedParts(prev => [...prev, {
+            partIndex: partData.partIndex,
+            totalParts: partData.totalParts,
+            startFrame: partData.startFrame,
+            endFrame: partData.endFrame,
+            filename: partData.filename,
+            blob: partData.zip,
+            url: partUrl
+          }]);
 
           if (settings.split?.autoDownload !== false) {
-            // Trigger an immediate download
-            const a = document.createElement('a');
-            a.href = partUrl;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
+            const link = document.createElement('a');
+            link.href = partUrl;
+            link.download = partData.filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
           }
 
           toast({
-            title: `Part ${partIndex}/${totalParts} Ready`,
-            description: `${filename} ${settings.split?.autoDownload !== false ? 'downloading...' : 'ready for download'}`
+            title: "Part Ready",
+            description: `Part ${partData.partIndex}/${partData.totalParts} is ready for download`,
           });
           break;
 
         case 'COMPLETE':
-          console.log('[ExtractionEngine] Extraction complete:', event.data.totalFrames);
-          setProgress(prev => ({ ...prev, status: 'complete', percent: 100 }));
           setIsExtracting(false);
+          setProgress(prev => ({ ...prev, status: 'complete' }));
+          
           toast({
-            title: "Extraction Complete",
-            description: `Successfully extracted ${event.data.totalFrames} frames`
+            title: "Extraction Complete!",
+            description: `Successfully extracted ${(event.data as any).totalFrames} frames`,
           });
+
+          onFramesExtracted?.(frames);
           break;
 
         case 'ERROR':
-          const errorMsg = event.data as { type: 'ERROR'; error: string };
-          console.error('[ExtractionEngine] Worker error:', errorMsg.error);
-          setProgress(prev => ({ ...prev, status: 'error', error: errorMsg.error }));
           setIsExtracting(false);
+          setLastWorkerError((event.data as any).error);
+          setProgress(prev => ({ ...prev, status: 'error', error: (event.data as any).error }));
+          
           toast({
             title: "Extraction Failed",
-            description: errorMsg.error,
-            variant: "destructive"
+            description: (event.data as any).error,
+            variant: "destructive",
           });
           break;
       }
     };
 
-    workerRef.current.onerror = (error) => {
+    worker.onerror = (error) => {
       console.error('Worker error:', error);
+      setLastWorkerError(`Worker crashed: ${String(error)}`);
+      setWorkerAlive(false);
+      setFfmpegReady(false);
       setIsExtracting(false);
-      setProgress(prev => ({ ...prev, status: 'error', error: 'Worker failed' }));
+      setProgress(prev => ({ ...prev, status: 'error', error: 'Worker failed to initialize' }));
+      
       toast({
         title: "Worker Error",
-        description: "Failed to initialize extraction worker",
-        variant: "destructive"
+        description: "Failed to initialize video processing worker",
+        variant: "destructive",
       });
     };
 
-    // Initialize worker with basePath
-    workerRef.current.postMessage({ type: 'INIT', basePath } as WorkerInMessage);
-  };
-
-  // Helper: ensure worker exists & is ready
-  const ensureWorkerReady = async () => {
-    if (!workerRef.current) initializeWorker();
-    // If READY already seen, short-circuit
-    if (workerReadyRef.current) return;
-    // Otherwise wait for the READY promise
-    await (readyPromiseRef.current ?? Promise.resolve());
-  };
+    return () => {
+      worker.terminate();
+      
+      // Clean up object URLs
+      frames.forEach(frame => {
+        if (frame.url) {
+          URL.revokeObjectURL(frame.url);
+        }
+      });
+      
+      generatedParts.forEach(part => {
+        if (part.url) {
+          URL.revokeObjectURL(part.url);
+        }
+      });
+    };
+  }, []);
 
   const startExtraction = async () => {
-    if (!file || !metadata) {
-      console.log('[ExtractionEngine] Missing file or metadata:', { file: !!file, metadata: !!metadata });
+    if (!file || !metadata) return;
+    
+    if (!workerRef.current) {
       toast({
-        title: "Cannot Start Extraction",
-        description: "Please wait for the file metadata to load before extracting frames.",
-        variant: "destructive"
+        title: "Worker Error",
+        description: "Video processing worker is not available",
+        variant: "destructive",
       });
       return;
     }
-    
-    console.log('[ExtractionEngine] Starting extraction...', { 
-      file: file.name, 
-      metadata: { width: metadata.width, height: metadata.height, duration: metadata.duration },
-      settings 
-    });
-    
-    setIsExtracting(true);
-    setFrames([]);
-    setGeneratedParts([]);
-    setProgress({ frames: 0, percent: 0, status: 'processing' });
-    
-    toast({
-      title: "Starting extraction...",
-      description: "Initializing FFmpeg and processing your file."
-    });
-    
+
+    if (!ffmpegReady) {
+      toast({
+        title: "Please wait",
+        description: "Initializing FFmpeg...",
+      });
+      return;
+    }
+
     try {
-      await ensureWorkerReady();
-      
-      // Send extraction command with metadata
-      console.log('[ExtractionEngine] Sending EXTRACT command to worker...');
-      workerRef.current?.postMessage({
+      setIsExtracting(true);
+      setFrames([]);
+      setGeneratedParts([]);
+      setProgress({
+        frames: 0,
+        percent: 0,
+        status: 'processing'
+      });
+
+      workerRef.current.postMessage({
         type: 'EXTRACT',
         file,
         settings,
         metadata
       } as WorkerInMessage);
+
     } catch (error) {
-      console.error('[ExtractionEngine] Failed to start extraction:', error);
-      toast({
-        title: "Extraction Failed",
-        description: error instanceof Error ? error.message : "Failed to start extraction",
-        variant: "destructive"
-      });
-      setProgress({
-        frames: 0,
-        percent: 0,
-        status: 'error',
-        error: 'Failed to start extraction'
-      });
+      console.error('Failed to start extraction:', error);
       setIsExtracting(false);
+      toast({
+        title: "Error",
+        description: "Failed to start frame extraction",
+        variant: "destructive",
+      });
     }
   };
 
@@ -244,39 +237,32 @@ export function ExtractionEngine({
       workerRef.current.terminate();
       workerRef.current = null;
     }
+    
     setIsExtracting(false);
-    setProgress({ frames: 0, percent: 0, status: 'cancelled' });
-    // Clean up extracted frames and parts
-    frames.forEach(frame => URL.revokeObjectURL(frame.url));
-    generatedParts.forEach(part => URL.revokeObjectURL(part.url));
-    setFrames([]);
-    setGeneratedParts([]);
+    setWorkerAlive(false);
+    setFfmpegReady(false);
+    setProgress(prev => ({ ...prev, status: 'cancelled' }));
+    
+    toast({
+      title: "Extraction Cancelled",
+      description: "Frame extraction has been stopped",
+    });
   };
 
-  // Update parent with extracted frames
-  useEffect(() => {
-    onFramesExtracted(frames);
-  }, [frames, onFramesExtracted]);
-
-  // Get estimated frames for button text
-  const getEstimatedFrames = () => {
-    if (!metadata) return 0;
+  // Get estimated frames for UI
+  const estimatedFrames = metadata ? (() => {
     try {
       const estimate = estimateFramesAndZip(metadata, settings);
       return estimate.frames;
     } catch {
       return 0;
     }
-  };
-
-  const estimatedFrames = getEstimatedFrames();
-  const basePath = `${window.location.origin}${(import.meta as any).env?.BASE_URL ?? '/'}`.replace(/\/$/, '') + '/ffmpeg';
+  })() : 0;
 
   if (!file) {
     return null;
   }
-  
-  // Show loading state if metadata is not yet available
+
   if (!metadata) {
     return (
       <Card className="p-6">
@@ -307,34 +293,39 @@ export function ExtractionEngine({
               {isExtracting ? 'Extracting Frames...' : 'Ready to Extract'}
             </h4>
             <p className="text-sm text-muted-foreground">
-              {frames.length} frames extracted • Original {metadata?.width || 0}×{metadata?.height || 0}
-              {metadata && metadata.fps && ` • ${metadata.fps} FPS`}
+              {frames.length} frames extracted • Original {metadata.width}×{metadata.height}
+              {metadata.fps && ` • ${metadata.fps} FPS`}
             </p>
           </div>
-          
-          <div className="flex items-center gap-2">
+        </div>
+
+        {/* Extraction Button */}
+        <div className="space-y-3">
+          <Button
+            onClick={isExtracting ? cancelExtraction : startExtraction}
+            disabled={!file || !metadata || !ffmpegReady}
+            size="lg"
+            className="w-full"
+          >
             {isExtracting ? (
-              <Button 
-                onClick={cancelExtraction}
-                variant="outline"
-                size="sm"
-                className="flex items-center gap-2"
-              >
-                <X size={16} />
-                Cancel
-              </Button>
+              <>
+                <Square className="w-4 h-4 mr-2" />
+                Cancel Extraction
+              </>
             ) : (
-              <Button 
-                onClick={startExtraction}
-                className="bg-gradient-brand hover:opacity-90 text-brand-foreground font-semibold flex items-center gap-2"
-                size="lg"
-                disabled={!file || !metadata || !workerReady || isExtracting}
-              >
-                <Play size={16} />
+              <>
+                <Play className="w-4 h-4 mr-2" />
                 Extract {estimatedFrames > 0 ? `${estimatedFrames.toLocaleString()} Frames` : 'Frames'}
-              </Button>
+              </>
             )}
-          </div>
+          </Button>
+
+          <Diagnostics 
+            basePath={basePath}
+            workerAlive={workerAlive}
+            ffmpegReady={ffmpegReady}
+            lastError={lastWorkerError}
+          />
         </div>
 
         {/* Progress Bar */}
@@ -351,12 +342,13 @@ export function ExtractionEngine({
         {/* Status Messages */}
         {progress.status === 'error' && (
           <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+            <AlertCircle className="w-4 h-4 inline mr-2" />
             Error: {progress.error}
           </div>
         )}
 
         {progress.status === 'complete' && (frames.length > 0 || generatedParts.length > 0) && (
-          <div className="text-sm text-green-600 bg-green-50 dark:bg-green-950/20 p-3 rounded-md">
+          <div className="text-sm text-emerald-600 bg-emerald-50 dark:bg-emerald-950/20 p-3 rounded-md">
             ✓ Extraction complete! {generatedParts.length > 0 ? `${generatedParts.length} ZIP parts` : `${frames.length} frames`} ready for download.
           </div>
         )}
@@ -367,24 +359,25 @@ export function ExtractionEngine({
             <div className="text-sm font-medium">Generated parts ({generatedParts.length})</div>
             <ul className="space-y-1 max-h-32 overflow-y-auto">
               {generatedParts
-                .sort((a,b) => a.partIndex - b.partIndex)
-                .map(p => (
-                  <li key={p.partIndex} className="flex items-center justify-between text-xs rounded-md border px-3 py-2">
-                    <span className="font-mono">Part {p.partIndex}/{p.totalParts} — {p.filename}</span>
-                    <a 
-                      className="text-brand hover:underline font-medium" 
-                      href={p.url} 
-                      download={p.filename}
+                .sort((a, b) => a.partIndex - b.partIndex)
+                .map(part => (
+                  <li key={part.partIndex} className="flex items-center justify-between text-xs rounded-md border px-3 py-2">
+                    <span className="font-mono">Part {part.partIndex}/{part.totalParts} — {part.filename}</span>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      asChild
                     >
-                      Download
-                    </a>
+                      <a href={part.url} download={part.filename}>
+                        <Download className="w-3 h-3 mr-1" />
+                        Download
+                      </a>
+                    </Button>
                   </li>
-              ))}
+                ))}
             </ul>
           </div>
         )}
-
-        <Diagnostics basePath={basePath} workerReady={workerReady} />
 
         {/* Processing Info */}
         <div className="text-xs text-muted-foreground space-y-1">
