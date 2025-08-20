@@ -37,6 +37,9 @@ export function ExtractionEngine({
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
   const [workerReady, setWorkerReady] = useState(false);
   const workerRef = useRef<Worker | null>(null);
+  const workerReadyRef = useRef(false);
+  const readyPromiseRef = useRef<Promise<void> | null>(null);
+  const resolveReadyRef = useRef<() => void>(() => {});
   const { toast } = useToast();
 
   useEffect(() => {
@@ -55,11 +58,18 @@ export function ExtractionEngine({
       workerRef.current.terminate();
     }
 
+    workerReadyRef.current = false;
     setWorkerReady(false);
+
     workerRef.current = new Worker(
       new URL('../lib/ffmpeg/worker.ts', import.meta.url),
       { type: 'module' }
     );
+
+    // Create a promise that resolves when we get READY
+    readyPromiseRef.current = new Promise<void>((resolve) => {
+      resolveReadyRef.current = resolve;
+    });
 
     workerRef.current.onmessage = (event: MessageEvent<WorkerOutMessage>) => {
       const { type } = event.data;
@@ -68,7 +78,9 @@ export function ExtractionEngine({
       switch (type) {
         case 'READY':
           console.log('[ExtractionEngine] FFmpeg worker ready');
+          workerReadyRef.current = true;
           setWorkerReady(true);
+          resolveReadyRef.current();
           toast({
             title: "FFmpeg Ready",
             description: "Extraction engine initialized successfully."
@@ -132,6 +144,15 @@ export function ExtractionEngine({
     workerRef.current.postMessage({ type: 'INIT' } as WorkerInMessage);
   };
 
+  // Helper: ensure worker exists & is ready
+  const ensureWorkerReady = async () => {
+    if (!workerRef.current) initializeWorker();
+    // If READY already seen, short-circuit
+    if (workerReadyRef.current) return;
+    // Otherwise wait for the READY promise
+    await (readyPromiseRef.current ?? Promise.resolve());
+  };
+
   const startExtraction = async () => {
     if (!file || !metadata) {
       console.log('[ExtractionEngine] Missing file or metadata:', { file: !!file, metadata: !!metadata });
@@ -159,22 +180,7 @@ export function ExtractionEngine({
     });
     
     try {
-      // Initialize worker if needed
-      if (!workerRef.current || !workerReady) {
-        console.log('[ExtractionEngine] Creating new worker...');
-        initializeWorker();
-        // Wait for worker to be ready
-        await new Promise<void>((resolve) => {
-          const checkReady = () => {
-            if (workerReady) {
-              resolve();
-            } else {
-              setTimeout(checkReady, 100);
-            }
-          };
-          checkReady();
-        });
-      }
+      await ensureWorkerReady();
       
       // Send extraction command with metadata
       console.log('[ExtractionEngine] Sending EXTRACT command to worker...');
@@ -275,7 +281,7 @@ export function ExtractionEngine({
                 onClick={startExtraction}
                 className="bg-gradient-brand hover:opacity-90 text-brand-foreground font-semibold flex items-center gap-2"
                 size="lg"
-                disabled={!file || !metadata}
+                disabled={!file || !metadata || !workerReady || isExtracting}
               >
                 <Play size={16} />
                 Extract Frames

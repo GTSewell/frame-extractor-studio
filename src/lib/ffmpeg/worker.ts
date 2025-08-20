@@ -85,21 +85,32 @@ async function extractFrames(file: File, settings: ExtractionSettings, metadata?
     
     // Build extraction command
     const outExt = settings.outputFormat?.type === 'jpeg' ? 'jpg' : 'png';
-    const fps = (() => {
-      if (settings.mode === 'fps' && settings.fps) return settings.fps;
-      if (settings.mode === 'nth' && settings.nth && meta.fps) return Math.max(1, Math.floor(meta.fps / settings.nth));
-      // Default / "every" guard: cap to something reasonable if meta.fps is huge
-      return Math.min(meta.fps ?? 30, 30);
-    })();
 
-    const cmds: string[] = ['-i', inputName];
+    const cmds: string[] = [];
 
-    // Time range
-    if (settings.startTime !== undefined) cmds.push('-ss', String(settings.startTime));
-    if (settings.endTime !== undefined) cmds.push('-t', String(settings.endTime - (settings.startTime || 0)));
+    // Input (use input seeking for speed if you like)
+    if (settings.startTime !== undefined) cmds.push('-ss', String(settings.startTime)); // before -i for input seek
+    cmds.push('-i', inputName);
 
-    // FPS / sampling - use fps filter for better performance
-    cmds.push('-vf', `fps=${fps}`, '-vsync', '0');
+    if (settings.endTime !== undefined) {
+      const dur = (settings.startTime ? (settings.endTime - settings.startTime) : settings.endTime);
+      cmds.push('-t', String(dur));
+    }
+
+    if (settings.mode === 'every') {
+      // Decode all frames
+      cmds.push('-vsync', '0');                 // don't duplicate/drop
+    } else {
+      // Nth / FPS modes
+      const fps = (() => {
+        if (settings.mode === 'fps' && settings.fps) return settings.fps;
+        if (settings.mode === 'nth' && (metadata?.fps ?? 0) > 0 && settings.nth) {
+          return Math.max(1, Math.floor((metadata!.fps as number) / settings.nth));
+        }
+        return 30; // sane default
+      })();
+      cmds.push('-vf', `fps=${fps}`, '-vsync', '0');
+    }
 
     // Optional resize
     if (settings.scale?.mode === 'custom' && settings.scale.width && settings.scale.height) {
@@ -145,7 +156,11 @@ async function extractFrames(file: File, settings: ExtractionSettings, metadata?
       const blob = new Blob([data], { type: outExt === 'jpg' ? 'image/jpeg' : 'image/png' });
 
       // Rough timestamp estimate 
-      const timestamp = (i / (meta.fps || fps)) * 1000;
+      const estimatedFps = settings.mode === 'every' ? (meta.fps || 30) : 
+        (settings.mode === 'fps' && settings.fps) ? settings.fps :
+        (settings.mode === 'nth' && (metadata?.fps ?? 0) > 0 && settings.nth) ? Math.max(1, Math.floor((metadata!.fps as number) / settings.nth)) :
+        30;
+      const timestamp = (i / estimatedFps) * 1000;
 
       // Generate filename following naming pattern
       const filename = settings.naming.pattern
