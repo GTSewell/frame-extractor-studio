@@ -61,28 +61,36 @@ export function ExtractionEngine({
 
     workerRef.current.onmessage = (event: MessageEvent<WorkerOutMessage>) => {
       const { type } = event.data;
+      console.log('[ExtractionEngine] Worker message:', type);
 
       switch (type) {
         case 'READY':
-          console.log('FFmpeg worker ready');
+          console.log('[ExtractionEngine] FFmpeg worker ready');
+          toast({
+            title: "FFmpeg Ready",
+            description: "Extraction engine initialized successfully."
+          });
           break;
 
         case 'META':
-          console.log('Metadata received:', event.data.metadata);
+          console.log('[ExtractionEngine] Metadata received:', event.data.metadata);
           break;
 
         case 'PROGRESS':
           const newProgress = event.data.progress;
+          console.log('[ExtractionEngine] Progress update:', newProgress);
           setProgress(newProgress);
           onProgressUpdate(newProgress);
           break;
 
         case 'FRAME':
           const frame = event.data.frame;
+          console.log('[ExtractionEngine] Frame received:', frame.index);
           setFrames(prev => [...prev, frame]);
           break;
 
         case 'COMPLETE':
+          console.log('[ExtractionEngine] Extraction complete:', event.data.totalFrames);
           setProgress(prev => ({ ...prev, status: 'complete', percent: 100 }));
           setIsExtracting(false);
           toast({
@@ -93,6 +101,7 @@ export function ExtractionEngine({
 
         case 'ERROR':
           const errorMsg = event.data as { type: 'ERROR'; error: string };
+          console.error('[ExtractionEngine] Worker error:', errorMsg.error);
           setProgress(prev => ({ ...prev, status: 'error', error: errorMsg.error }));
           setIsExtracting(false);
           toast({
@@ -120,26 +129,53 @@ export function ExtractionEngine({
   };
 
   const startExtraction = async () => {
-    if (!file || !metadata) return;
-
-    // Reset state
+    if (!file || !metadata) {
+      console.log('[ExtractionEngine] Missing file or metadata:', { file: !!file, metadata: !!metadata });
+      return;
+    }
+    
+    console.log('[ExtractionEngine] Starting extraction...', { file: file.name, settings });
+    
+    setIsExtracting(true);
     setFrames([]);
     setProgress({ frames: 0, percent: 0, status: 'processing' });
-    setIsExtracting(true);
-
-    // Initialize worker if needed
-    if (!workerRef.current) {
-      initializeWorker();
-      // Wait a bit for worker to initialize
-      await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    toast({
+      title: "Starting extraction...",
+      description: "Initializing FFmpeg and processing your file."
+    });
+    
+    try {
+      // Initialize worker if needed
+      if (!workerRef.current) {
+        console.log('[ExtractionEngine] Creating new worker...');
+        initializeWorker();
+        // Wait for worker to initialize
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      
+      // Send extraction command
+      console.log('[ExtractionEngine] Sending EXTRACT command to worker...');
+      workerRef.current?.postMessage({
+        type: 'EXTRACT',
+        file,
+        settings
+      } as WorkerInMessage);
+    } catch (error) {
+      console.error('[ExtractionEngine] Failed to start extraction:', error);
+      toast({
+        title: "Extraction Failed",
+        description: error instanceof Error ? error.message : "Failed to start extraction",
+        variant: "destructive"
+      });
+      setProgress({
+        frames: 0,
+        percent: 0,
+        status: 'error',
+        error: 'Failed to start extraction'
+      });
+      setIsExtracting(false);
     }
-
-    // Start extraction
-    workerRef.current?.postMessage({
-      type: 'EXTRACT',
-      file,
-      settings
-    } as WorkerInMessage);
   };
 
   const cancelExtraction = () => {

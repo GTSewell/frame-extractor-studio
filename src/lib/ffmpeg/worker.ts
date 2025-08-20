@@ -1,6 +1,8 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { toBlobURL } from '@ffmpeg/util';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import type { WorkerInMessage, WorkerOutMessage, FileMetadata, ExtractionSettings, ExtractedFrame } from '../types';
+
+console.log('[Worker] Starting FFmpeg worker...');
 
 let ffmpeg: FFmpeg | null = null;
 let isInitialized = false;
@@ -9,20 +11,35 @@ let isInitialized = false;
 async function initFFmpeg(): Promise<void> {
   if (isInitialized) return;
   
-  ffmpeg = new FFmpeg();
+  console.log('[Worker] Initializing FFmpeg...');
   
-  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-  
-  ffmpeg.on('log', ({ message }) => {
-    console.log('[FFmpeg]', message);
-  });
-  
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-  });
-  
-  isInitialized = true;
+  try {
+    ffmpeg = new FFmpeg();
+    
+    // Add logging
+    ffmpeg.on('log', ({ message }) => {
+      console.log('[FFmpeg]', message);
+    });
+
+    ffmpeg.on('progress', ({ progress, time }) => {
+      console.log('[FFmpeg Progress]', { progress, time });
+    });
+    
+    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.15/dist/esm';
+    
+    console.log('[Worker] Loading FFmpeg core files...');
+    
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+    });
+    
+    console.log('[Worker] FFmpeg initialized successfully');
+    isInitialized = true;
+  } catch (error) {
+    console.error('[Worker] Failed to initialize FFmpeg:', error);
+    throw new Error(`Failed to initialize FFmpeg: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 }
 
 // Extract metadata from file
@@ -226,11 +243,17 @@ self.onmessage = async (event: MessageEvent<WorkerInMessage>) => {
   try {
     switch (type) {
       case 'INIT':
+        console.log('[Worker] Received INIT message');
         await initFFmpeg();
         postMessage({ type: 'READY' } as WorkerOutMessage);
         break;
         
       case 'EXTRACT':
+        console.log('[Worker] Received EXTRACT message');
+        if (!isInitialized) {
+          console.log('[Worker] FFmpeg not initialized, initializing now...');
+          await initFFmpeg();
+        }
         await extractFrames(event.data.file, event.data.settings);
         break;
         
@@ -243,6 +266,7 @@ self.onmessage = async (event: MessageEvent<WorkerInMessage>) => {
         console.warn('Unknown message type:', type);
     }
   } catch (error) {
+    console.error('[Worker] Error handling message:', error);
     postMessage({ 
       type: 'ERROR', 
       error: error instanceof Error ? error.message : 'Unknown error' 

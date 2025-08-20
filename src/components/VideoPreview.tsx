@@ -13,19 +13,39 @@ interface VideoPreviewProps {
 
 export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [url, setUrl] = useState<string>('');
+  const [isGif, setIsGif] = useState(false);
 
   useEffect(() => {
     const videoUrl = URL.createObjectURL(file);
     setUrl(videoUrl);
+    
+    // Check if file is GIF or APNG
+    const isGifFile = file.type === 'image/gif' || file.type === 'image/apng' || file.name.toLowerCase().endsWith('.gif') || file.name.toLowerCase().endsWith('.apng');
+    setIsGif(isGifFile);
+    
+    // For GIF/APNG, extract basic metadata immediately
+    if (isGifFile) {
+      const extractedMetadata: FileMetadata = {
+        duration: 1, // Default duration for GIFs
+        width: 0, // Will be updated when image loads
+        height: 0, // Will be updated when image loads
+        fps: undefined,
+        codec: undefined,
+        size: file.size,
+        name: file.name
+      };
+      onMetadataLoad?.(extractedMetadata);
+    }
 
     return () => {
       URL.revokeObjectURL(videoUrl);
     };
-  }, [file]);
+  }, [file, onMetadataLoad]);
 
   const handleLoadedMetadata = () => {
     const video = videoRef.current;
@@ -42,6 +62,23 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
     };
 
     setDuration(video.duration);
+    onMetadataLoad?.(extractedMetadata);
+  };
+
+  const handleImageLoad = () => {
+    const img = imgRef.current;
+    if (!img || !isGif) return;
+
+    const extractedMetadata: FileMetadata = {
+      duration: 1, // Default duration for GIFs
+      width: img.naturalWidth,
+      height: img.naturalHeight,
+      fps: undefined,
+      codec: undefined,
+      size: file.size,
+      name: file.name
+    };
+
     onMetadataLoad?.(extractedMetadata);
   };
 
@@ -96,70 +133,86 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
   return (
     <Card className="overflow-hidden bg-surface">
       <div className="aspect-video bg-black rounded-t-lg overflow-hidden relative">
-        <video
-          ref={videoRef}
-          src={url}
-          className="w-full h-full object-contain"
-          onLoadedMetadata={handleLoadedMetadata}
-          onTimeUpdate={handleTimeUpdate}
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
-          onEnded={() => setIsPlaying(false)}
-          preload="metadata"
-        />
+        {isGif ? (
+          <img
+            ref={imgRef}
+            src={url}
+            alt="Preview"
+            className="w-full h-full object-contain"
+            onLoad={handleImageLoad}
+          />
+        ) : (
+          <video
+            ref={videoRef}
+            src={url}
+            className="w-full h-full object-contain"
+            onLoadedMetadata={handleLoadedMetadata}
+            onTimeUpdate={handleTimeUpdate}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onEnded={() => setIsPlaying(false)}
+            preload="metadata"
+          />
+        )}
         
-        {/* Overlay controls */}
-        <div className="absolute inset-0 bg-black/30 opacity-0 hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
-          <Button
-            size="lg"
-            variant="secondary"
-            className="bg-black/50 hover:bg-black/70 text-white border-0"
-            onClick={handlePlayPause}
-          >
-            {isPlaying ? <Pause size={24} /> : <Play size={24} />}
-          </Button>
-        </div>
+        {/* Overlay controls - only show for videos */}
+        {!isGif && (
+          <div className="absolute inset-0 bg-black/30 opacity-0 hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
+            <Button
+              size="lg"
+              variant="secondary"
+              className="bg-black/50 hover:bg-black/70 text-white border-0"
+              onClick={handlePlayPause}
+            >
+              {isPlaying ? <Pause size={24} /> : <Play size={24} />}
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="p-6 space-y-4">
-        {/* Timeline */}
-        <div className="space-y-2">
-          <Slider
-            value={[progressPercentage]}
-            onValueChange={handleSeek}
-            className="w-full"
-            step={0.1}
-            max={100}
-          />
-          
-          <div className="flex items-center justify-between text-caption text-muted-foreground">
-            <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(duration)}</span>
+        {/* Timeline - only show for videos */}
+        {!isGif && (
+          <div className="space-y-2">
+            <Slider
+              value={[progressPercentage]}
+              onValueChange={handleSeek}
+              className="w-full"
+              step={0.1}
+              max={100}
+            />
+            
+            <div className="flex items-center justify-between text-caption text-muted-foreground">
+              <span>{formatTime(currentTime)}</span>
+              <span>{formatTime(duration)}</span>
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Controls */}
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handlePlayPause}
-            className="flex items-center gap-2"
-          >
-            {isPlaying ? <Pause size={16} /> : <Play size={16} />}
-            {isPlaying ? 'Pause' : 'Play'}
-          </Button>
-          
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleReset}
-            className="flex items-center gap-2"
-          >
-            <RotateCcw size={16} />
-            Reset
-          </Button>
-        </div>
+        {/* Controls - only show for videos */}
+        {!isGif && (
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handlePlayPause}
+              className="flex items-center gap-2"
+            >
+              {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+              {isPlaying ? 'Pause' : 'Play'}
+            </Button>
+            
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleReset}
+              className="flex items-center gap-2"
+            >
+              <RotateCcw size={16} />
+              Reset
+            </Button>
+          </div>
+        )}
 
         {/* Metadata */}
         {metadata && (
@@ -169,10 +222,12 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
                 <span className="text-muted-foreground">Dimensions:</span>
                 <span className="ml-2 font-medium">{metadata.width} × {metadata.height}</span>
               </div>
-              <div>
-                <span className="text-muted-foreground">Duration:</span>
-                <span className="ml-2 font-medium">{formatTime(metadata.duration)}</span>
-              </div>
+              {!isGif && (
+                <div>
+                  <span className="text-muted-foreground">Duration:</span>
+                  <span className="ml-2 font-medium">{formatTime(metadata.duration)}</span>
+                </div>
+              )}
               <div>
                 <span className="text-muted-foreground">Size:</span>
                 <span className="ml-2 font-medium">
