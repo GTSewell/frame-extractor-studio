@@ -184,6 +184,90 @@ export function SettingsPanel({
 
         {showAdvanced && (
           <div className="space-y-4 p-4 rounded-lg bg-surface border border-border">
+            {/* Split Export */}
+            <div className="space-y-3">
+              <Label>Split Export (recommended for large jobs)</Label>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  checked={settings.split?.enabled || false}
+                  onCheckedChange={(enabled) => {
+                    const bytesPerFrameMid = metadata ? 
+                      (metadata.width * metadata.height * 0.9) : // rough estimate
+                      (1920 * 1080 * 0.9);
+                    const recommended = Math.max(100, Math.min(2000, Math.floor(500 * 1024 * 1024 / bytesPerFrameMid) || 250));
+                    
+                    onSettingsChange({
+                      ...settings,
+                      split: {
+                        enabled,
+                        framesPerPart: enabled ? (settings.split?.framesPerPart || recommended) : 250,
+                        autoDownload: settings.split?.autoDownload ?? true,
+                        previewThumbnails: settings.split?.previewThumbnails ?? false
+                      }
+                    });
+                  }}
+                />
+                <span className="text-sm text-muted-foreground">
+                  Reduce memory usage for large extractions
+                </span>
+              </div>
+              
+              {settings.split?.enabled && (
+                <div className="space-y-3 p-3 rounded-lg bg-muted/30">
+                  <div className="space-y-2">
+                    <Label htmlFor="framesPerPart">Frames per ZIP part</Label>
+                    <Input
+                      id="framesPerPart"
+                      type="number"
+                      value={settings.split.framesPerPart}
+                      onChange={(e) => {
+                        const framesPerPart = Math.max(100, parseInt(e.target.value) || 250);
+                        onSettingsChange({
+                          ...settings,
+                          split: { ...settings.split!, framesPerPart }
+                        });
+                      }}
+                      min={100}
+                      max={2000}
+                    />
+                    <div className="text-xs text-muted-foreground">
+                      Higher values = fewer ZIP files but more memory usage
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      checked={settings.split.autoDownload ?? true}
+                      onCheckedChange={(autoDownload) => {
+                        onSettingsChange({
+                          ...settings,
+                          split: { ...settings.split!, autoDownload }
+                        });
+                      }}
+                    />
+                    <Label className="text-sm">Auto-download parts as ready</Label>
+                  </div>
+                  
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      checked={settings.split.previewThumbnails ?? false}
+                      onCheckedChange={(previewThumbnails) => {
+                        onSettingsChange({
+                          ...settings,
+                          split: { ...settings.split!, previewThumbnails }
+                        });
+                      }}
+                    />
+                    <Label className="text-sm">Show thumbnails while exporting</Label>
+                  </div>
+                  
+                  <div className="text-xs text-muted-foreground bg-info/10 p-2 rounded">
+                    💡 Split export creates multiple ZIP files and reduces browser memory usage during large extractions.
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Output Format */}
             <div className="space-y-3">
               <Label>Output Format</Label>

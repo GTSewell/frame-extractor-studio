@@ -10,6 +10,13 @@ export interface FileMetadata {
   name: string;
 }
 
+export interface SplitExport {
+  enabled: boolean;
+  framesPerPart: number;      // e.g., 100–1000
+  autoDownload?: boolean;
+  previewThumbnails?: boolean;
+}
+
 export interface ExtractionSettings {
   mode: 'every' | 'fps' | 'nth' | 'range';
   fps?: number;
@@ -30,6 +37,7 @@ export interface ExtractionSettings {
     type: 'png' | 'jpeg' | 'png-compressed';
     quality?: number; // For JPEG (1-100)
   };
+  split?: SplitExport; // NEW
 }
 
 export interface ExtractedFrame {
@@ -59,11 +67,22 @@ export type WorkerInMessage =
     }
   | { type: 'CANCEL' };
 
+export interface PartReady {
+  type: 'PART_READY';
+  partIndex: number;        // 1-based
+  totalParts: number;
+  startFrame: number;       // global index, 0-based
+  endFrame: number;         // inclusive
+  filename: string;         // suggested zip filename
+  zip: Blob;                // ZIP blob
+}
+
 export type WorkerOutMessage =
   | { type: 'READY' }
   | { type: 'META'; metadata: FileMetadata }
   | { type: 'PROGRESS'; progress: ExtractionProgress }
   | { type: 'FRAME'; frame: ExtractedFrame }
+  | PartReady
   | { type: 'COMPLETE'; totalFrames: number }
   | { type: 'ERROR'; error: string };
 
@@ -86,5 +105,11 @@ export const DEFAULT_SETTINGS: ExtractionSettings = {
   outputFormat: {
     type: 'png',
     quality: 90
+  },
+  split: {
+    enabled: false,
+    framesPerPart: 250,
+    autoDownload: true,
+    previewThumbnails: false
   }
 };

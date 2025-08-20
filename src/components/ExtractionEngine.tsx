@@ -36,6 +36,7 @@ export function ExtractionEngine({
   });
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
   const [workerReady, setWorkerReady] = useState(false);
+  const [generatedParts, setGeneratedParts] = useState<{ partIndex: number; totalParts: number; filename: string; url: string }[]>([]);
   const workerRef = useRef<Worker | null>(null);
   const workerReadyRef = useRef(false);
   const readyPromiseRef = useRef<Promise<void> | null>(null);
@@ -50,8 +51,10 @@ export function ExtractionEngine({
       }
       // Clean up frame URLs
       frames.forEach(frame => URL.revokeObjectURL(frame.url));
+      // Clean up part URLs
+      generatedParts.forEach(part => URL.revokeObjectURL(part.url));
     };
-  }, [frames]);
+  }, [frames, generatedParts]);
 
   const initializeWorker = () => {
     if (workerRef.current) {
@@ -101,8 +104,29 @@ export function ExtractionEngine({
         case 'FRAME':
           const f = event.data.frame;
           console.log('[ExtractionEngine] Frame received:', f.index);
-          const url = URL.createObjectURL(f.blob);
-          setFrames(prev => [...prev, { ...f, url }]);
+          const frameUrl = URL.createObjectURL(f.blob);
+          setFrames(prev => [...prev, { ...f, url: frameUrl }]);
+          break;
+
+        case 'PART_READY':
+          const { partIndex, totalParts, filename, zip } = event.data;
+          const partUrl = URL.createObjectURL(zip);
+          setGeneratedParts(prev => [...prev, { partIndex, totalParts, filename, url: partUrl }]);
+
+          if (settings.split?.autoDownload !== false) {
+            // Trigger an immediate download
+            const a = document.createElement('a');
+            a.href = partUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }
+
+          toast({
+            title: `Part ${partIndex}/${totalParts} Ready`,
+            description: `${filename} ${settings.split?.autoDownload !== false ? 'downloading...' : 'ready for download'}`
+          });
           break;
 
         case 'COMPLETE':
@@ -172,6 +196,7 @@ export function ExtractionEngine({
     
     setIsExtracting(true);
     setFrames([]);
+    setGeneratedParts([]);
     setProgress({ frames: 0, percent: 0, status: 'processing' });
     
     toast({
@@ -215,9 +240,11 @@ export function ExtractionEngine({
     }
     setIsExtracting(false);
     setProgress({ frames: 0, percent: 0, status: 'cancelled' });
-    // Clean up extracted frames
+    // Clean up extracted frames and parts
     frames.forEach(frame => URL.revokeObjectURL(frame.url));
+    generatedParts.forEach(part => URL.revokeObjectURL(part.url));
     setFrames([]);
+    setGeneratedParts([]);
   };
 
   // Update parent with extracted frames
@@ -308,9 +335,32 @@ export function ExtractionEngine({
           </div>
         )}
 
-        {progress.status === 'complete' && frames.length > 0 && (
+        {progress.status === 'complete' && (frames.length > 0 || generatedParts.length > 0) && (
           <div className="text-sm text-green-600 bg-green-50 dark:bg-green-950/20 p-3 rounded-md">
-            ✓ Extraction complete! {frames.length} frames ready for download.
+            ✓ Extraction complete! {generatedParts.length > 0 ? `${generatedParts.length} ZIP parts` : `${frames.length} frames`} ready for download.
+          </div>
+        )}
+
+        {/* Generated Parts */}
+        {generatedParts.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-sm font-medium">Generated parts ({generatedParts.length})</div>
+            <ul className="space-y-1 max-h-32 overflow-y-auto">
+              {generatedParts
+                .sort((a,b) => a.partIndex - b.partIndex)
+                .map(p => (
+                  <li key={p.partIndex} className="flex items-center justify-between text-xs rounded-md border px-3 py-2">
+                    <span className="font-mono">Part {p.partIndex}/{p.totalParts} — {p.filename}</span>
+                    <a 
+                      className="text-brand hover:underline font-medium" 
+                      href={p.url} 
+                      download={p.filename}
+                    >
+                      Download
+                    </a>
+                  </li>
+              ))}
+            </ul>
           </div>
         )}
 
@@ -318,7 +368,7 @@ export function ExtractionEngine({
         <div className="text-xs text-muted-foreground space-y-1">
           <p>• Files are processed entirely in your browser</p>
           <p>• Original resolution preserved</p>
-          <p>• PNG format with lossless quality</p>
+          <p>• {settings.split?.enabled ? 'Split export reduces memory usage' : 'PNG format with lossless quality'}</p>
         </div>
       </div>
     </Card>

@@ -115,3 +115,12 @@ export function estimateFramesAndZip(
     notes
   };
 }
+
+export function recommendFramesPerPart(
+  estBytesPerFrame: number,        // mid estimate per frame
+  targetZipBytes = 500 * 1024 * 1024   // ~500 MB
+) {
+  if (estBytesPerFrame <= 0) return 250;
+  const f = Math.floor(targetZipBytes / estBytesPerFrame);
+  return Math.max(100, Math.min(2000, f || 250)); // clamp to [100, 2000]
+}
