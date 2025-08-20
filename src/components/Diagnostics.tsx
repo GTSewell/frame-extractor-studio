@@ -4,10 +4,11 @@ type Props = {
   basePath: string; 
   workerAlive: boolean;
   ffmpegReady: boolean;
+  ffmpegInitMode?: 'blob' | 'http' | null;
   lastError?: string | null;
 }
 
-export default function Diagnostics({ basePath, workerAlive, ffmpegReady, lastError }: Props) {
+export default function Diagnostics({ basePath, workerAlive, ffmpegReady, ffmpegInitMode, lastError }: Props) {
   const [coreOk, setCoreOk] = useState<boolean | null>(null);
   const coi = typeof window !== 'undefined' ? (window as any).crossOriginIsolated === true : null;
 
@@ -45,7 +46,7 @@ export default function Diagnostics({ basePath, workerAlive, ffmpegReady, lastEr
         <Pill ok={coreOk} label="FFmpeg Core" />
         <Pill ok={coi ?? null} label="COI" />
         <Pill ok={workerAlive} label="Worker" />
-        <Pill ok={ffmpegReady} label="FFmpeg" />
+        <Pill ok={ffmpegReady} label={`FFmpeg${ffmpegInitMode ? ` (${ffmpegInitMode})` : ''}`} />
       </div>
       {!!lastError && (
         <div className="p-2 bg-destructive/10 border border-destructive/20 rounded text-destructive/90 text-xs">
@@ -54,7 +55,7 @@ export default function Diagnostics({ basePath, workerAlive, ffmpegReady, lastEr
       )}
       {coi === false && (
         <div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-yellow-600 dark:text-yellow-400 text-xs">
-          <strong>Note:</strong> COI (Cross-Origin Isolation) failed but FFmpeg can still work in single-threaded mode.
+          <strong>Note:</strong> COI is <em>off</em>; FRAMED is running FFmpeg in single-threaded mode (fallback via blob URLs).
         </div>
       )}
       {basePath && (

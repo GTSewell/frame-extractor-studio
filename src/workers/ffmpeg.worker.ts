@@ -1,5 +1,5 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile } from '@ffmpeg/util';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import JSZip from 'jszip';
 import type { WorkerInMessage, WorkerOutMessage, ExtractionSettings, FileMetadata, ExtractedFrame } from '@/lib/types';
 
@@ -29,12 +29,23 @@ async function initFFmpeg() {
       basePath = (self as any).location?.origin + '/ffmpeg';
     }
 
-    const coreURL = `${basePath}/ffmpeg-core.js`;
-    const wasmURL = `${basePath}/ffmpeg-core.wasm`;
+    const base = basePath.replace(/\/$/, '');
+    
+    // Use blob URLs if NOT cross-origin isolated (preview/sandbox),
+    // otherwise plain HTTP same-origin URLs.
+    const useBlob = !(self as any).crossOriginIsolated;
+    let coreURL: string;
+    let wasmURL: string;
 
-    // Check if core files are accessible
-    await check(coreURL);
-    await check(wasmURL);
+    if (useBlob) {
+      // This fetches the files and serves them back as blob: URLs;
+      // avoids odd COEP/CORP interactions in sandboxed previews.
+      coreURL = await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript');
+      wasmURL = await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm');
+    } else {
+      coreURL = `${base}/ffmpeg-core.js`;
+      wasmURL = `${base}/ffmpeg-core.wasm`;
+    }
 
     ffmpeg = new FFmpeg();
     
@@ -58,12 +69,17 @@ async function initFFmpeg() {
     await ffmpeg.load({ coreURL, wasmURL });
 
     ffmpegReady = true;
-    (postMessage as any)({ type: 'FFMPEG_READY' } as WorkerOutMessage);
+    (postMessage as any)({ 
+      type: 'FFMPEG_READY', 
+      initMode: useBlob ? 'blob' : 'http', 
+      base 
+    } as WorkerOutMessage);
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
+    const useBlob = !(self as any).crossOriginIsolated;
     (postMessage as any)({ 
       type: 'ERROR', 
-      error: `FFmpeg initialization failed: ${errorMsg}. Make sure FFmpeg core files are available at ${basePath}/`
+      error: `ffmpeg.load failed (${useBlob ? 'blob' : 'http'}): ${errorMsg}`
     } as WorkerOutMessage);
     throw error;
   }
@@ -237,6 +253,11 @@ self.onmessage = async (evt: MessageEvent<WorkerInMessage>) => {
 
     if (msg.type === 'INIT') {
       basePath = (msg.basePath || '').replace(/\/$/, '');
+      await initFFmpeg();
+      return;
+    }
+
+    if (msg.type === 'SELF_TEST') {
       await initFFmpeg();
       return;
     }

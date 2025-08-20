@@ -59,6 +59,7 @@ export interface ExtractionProgress {
 // Worker Messages
 export type WorkerInMessage =
   | { type: 'INIT'; basePath?: string }
+  | { type: 'SELF_TEST' }
   | { 
       type: 'EXTRACT'; 
       file: File; 
@@ -79,7 +80,7 @@ export interface PartReady {
 
 export type WorkerOutMessage =
   | { type: 'ALIVE' }
-  | { type: 'FFMPEG_READY' }
+  | { type: 'FFMPEG_READY'; initMode?: 'blob' | 'http'; base?: string }
   | { type: 'READY' }
   | { type: 'META'; metadata: FileMetadata }
   | { type: 'PROGRESS'; progress: ExtractionProgress }

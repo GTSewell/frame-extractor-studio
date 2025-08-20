@@ -42,6 +42,7 @@ export function ExtractionEngine({
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
   const [workerAlive, setWorkerAlive] = useState(false);
   const [ffmpegReady, setFfmpegReady] = useState(false);
+  const [ffmpegInitMode, setFfmpegInitMode] = useState<'blob' | 'http' | null>(null);
   const [lastWorkerError, setLastWorkerError] = useState<string | null>(null);
   const [generatedParts, setGeneratedParts] = useState<Array<{
     partIndex: number;
@@ -75,6 +76,7 @@ export function ExtractionEngine({
 
         case 'FFMPEG_READY':
           setFfmpegReady(true);
+          setFfmpegInitMode((event.data as any).initMode ?? null);
           break;
 
         case 'READY':
@@ -324,6 +326,7 @@ export function ExtractionEngine({
             basePath={basePath}
             workerAlive={workerAlive}
             ffmpegReady={ffmpegReady}
+            ffmpegInitMode={ffmpegInitMode}
             lastError={lastWorkerError}
           />
         </div>
