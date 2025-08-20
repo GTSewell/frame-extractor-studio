@@ -9,6 +9,7 @@ import { SettingsPanel } from '@/components/SettingsPanel';
 import { ExtractionEngine } from '@/components/ExtractionEngine';
 import { FramesGrid } from '@/components/FramesGrid';
 import { useDownloadZip } from '@/components/DownloadZip';
+import EstimateNotice from '@/components/EstimateNotice';
 import { Info, Shield, Github } from 'lucide-react';
 import { FileMetadata, ExtractionSettings, DEFAULT_SETTINGS, ExtractedFrame, ExtractionProgress } from '@/lib/types';
 
@@ -194,6 +195,12 @@ export default function Index() {
                   metadata={metadata}
                   estimatedFrames={estimatedFrames}
                   estimatedSize={estimatedFrames * 1024 * 512} // Rough estimate
+                />
+
+                {/* Estimate Notice */}
+                <EstimateNotice
+                  metadata={metadata}
+                  settings={settings}
                 />
 
                 {/* Extraction Engine */}
