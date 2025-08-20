@@ -5,6 +5,7 @@ import { Progress } from '@/components/ui/progress';
 import { X, Download, Pause, Play } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { estimateFramesAndZip } from '@/lib/estimate';
+import Diagnostics from './Diagnostics';
 import type { 
   FileMetadata, 
   ExtractionSettings, 
@@ -76,6 +77,8 @@ export function ExtractionEngine({
     readyPromiseRef.current = new Promise<void>((resolve) => {
       resolveReadyRef.current = resolve;
     });
+
+    const basePath = `${window.location.origin}${(import.meta as any).env?.BASE_URL ?? '/'}`.replace(/\/$/, '') + '/ffmpeg';
 
     workerRef.current.onmessage = (event: MessageEvent<WorkerOutMessage>) => {
       const { type } = event.data;
@@ -167,8 +170,8 @@ export function ExtractionEngine({
       });
     };
 
-    // Initialize worker
-    workerRef.current.postMessage({ type: 'INIT' } as WorkerInMessage);
+    // Initialize worker with basePath
+    workerRef.current.postMessage({ type: 'INIT', basePath } as WorkerInMessage);
   };
 
   // Helper: ensure worker exists & is ready
@@ -267,6 +270,7 @@ export function ExtractionEngine({
   };
 
   const estimatedFrames = getEstimatedFrames();
+  const basePath = `${window.location.origin}${(import.meta as any).env?.BASE_URL ?? '/'}`.replace(/\/$/, '') + '/ffmpeg';
 
   if (!file) {
     return null;
@@ -379,6 +383,8 @@ export function ExtractionEngine({
             </ul>
           </div>
         )}
+
+        <Diagnostics basePath={basePath} workerReady={workerReady} />
 
         {/* Processing Info */}
         <div className="text-xs text-muted-foreground space-y-1">

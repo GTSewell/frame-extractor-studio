@@ -1,55 +1,60 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import { fetchFile } from '@ffmpeg/util';
 import JSZip from 'jszip';
 import type { WorkerInMessage, WorkerOutMessage, FileMetadata, ExtractionSettings } from '../types';
 
 console.log('[Worker] Starting FFmpeg worker...');
 
 let ffmpeg: FFmpeg | null = null;
-let isInitialized = false;
+let ready = false;
+let basePath = ''; // filled from main thread
 
-// Initialize FFmpeg with cross-origin isolation support
+async function check(url: string) {
+  try {
+    const r = await fetch(url, { method: 'HEAD', cache: 'no-cache' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  } catch (e: any) {
+    throw new Error(`FFmpeg core not reachable at ${url}: ${e?.message || e}`);
+  }
+}
+
 async function initFFmpeg(): Promise<void> {
-  if (isInitialized) return;
+  if (ready && ffmpeg) return;
   
   console.log('[Worker] Initializing FFmpeg...');
   
-  try {
-    ffmpeg = new FFmpeg();
-    
-    // Add logging
-    ffmpeg.on('log', ({ message }) => {
-      console.log('[FFmpeg]', message);
-    });
+  const coreURL = `${basePath}/ffmpeg-core.js`;
+  const wasmURL = `${basePath}/ffmpeg-core.wasm`;
 
-    ffmpeg.on('progress', ({ progress, time }) => {
-      console.log('[FFmpeg Progress]', { progress, time });
-      // Send progress updates to main thread
-      postMessage({
-        type: 'PROGRESS',
-        progress: {
-          frames: 0, // Will be updated separately
-          percent: Math.min(progress * 100, 100),
-          status: 'processing'
-        }
-      } as WorkerOutMessage);
-    });
-    
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.15/dist/esm';
-    
-    console.log('[Worker] Loading FFmpeg core files...');
-    
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-    });
-    
-    console.log('[Worker] FFmpeg initialized successfully');
-    isInitialized = true;
-  } catch (error) {
-    console.error('[Worker] Failed to initialize FFmpeg:', error);
-    throw new Error(`Failed to initialize FFmpeg: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
+  // Preflight with explicit error if missing
+  await check(coreURL);
+  await check(wasmURL);
+
+  ffmpeg = new FFmpeg();
+  
+  // Add logging
+  ffmpeg.on('log', ({ message }) => {
+    console.log('[FFmpeg]', message);
+  });
+
+  ffmpeg.on('progress', ({ progress, time }) => {
+    console.log('[FFmpeg Progress]', { progress, time });
+    // Send progress updates to main thread
+    postMessage({
+      type: 'PROGRESS',
+      progress: {
+        frames: 0, // Will be updated separately
+        percent: Math.min(progress * 100, 100),
+        status: 'processing'
+      }
+    } as WorkerOutMessage);
+  });
+
+  // Direct same-origin URLs: no CDN, no relative paths
+  await ffmpeg.load({ coreURL, wasmURL });
+
+  ready = true;
+  console.log('[Worker] FFmpeg initialized successfully');
 }
 
 // Safe metadata function that doesn't use DOM APIs
@@ -304,39 +309,37 @@ async function extractFrames(file: File, settings: ExtractionSettings, metadata?
 
 // Handle messages from main thread
 self.onmessage = async (event: MessageEvent<WorkerInMessage>) => {
-  const { type } = event.data;
+  const msg = event.data;
   
   try {
-    switch (type) {
-      case 'INIT':
-        console.log('[Worker] Received INIT message');
-        await initFFmpeg();
-        postMessage({ type: 'READY' } as WorkerOutMessage);
-        break;
-        
-      case 'EXTRACT':
-        console.log('[Worker] Received EXTRACT message');
-        if (!isInitialized) {
-          console.log('[Worker] FFmpeg not initialized, initializing now...');
-          await initFFmpeg();
-        }
-        const { file, settings, metadata } = event.data;
-        await extractFrames(file, settings, metadata);
-        break;
-        
-      case 'CANCEL':
-        console.log('[Worker] Received CANCEL message');
-        self.close();
-        break;
-        
-      default:
-        console.warn('[Worker] Unknown message type:', type);
+    if (msg.type === 'INIT') {
+      console.log('[Worker] Received INIT message');
+      basePath = msg.basePath || '';
+      await initFFmpeg();
+      postMessage({ type: 'READY' } as WorkerOutMessage);
+      return;
     }
+
+    if (msg.type === 'EXTRACT') {
+      console.log('[Worker] Received EXTRACT message');
+      await initFFmpeg(); // ensure loaded
+      const { file, settings, metadata } = msg;
+      await extractFrames(file, settings, metadata);
+      return;
+    }
+
+    if (msg.type === 'CANCEL') {
+      console.log('[Worker] Received CANCEL message');
+      self.close();
+      return;
+    }
+    
+    console.warn('[Worker] Unknown message type:', (msg as any).type);
   } catch (error) {
     console.error('[Worker] Error handling message:', error);
     postMessage({ 
       type: 'ERROR', 
-      error: error instanceof Error ? error.message : 'Unknown error' 
+      error: `Failed to initialize FFmpeg: ${error instanceof Error ? error.message : 'Unknown error'}` 
     } as WorkerOutMessage);
   }
 };

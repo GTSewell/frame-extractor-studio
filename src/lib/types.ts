@@ -58,7 +58,7 @@ export interface ExtractionProgress {
 
 // Worker Messages
 export type WorkerInMessage =
-  | { type: 'INIT' }
+  | { type: 'INIT'; basePath?: string }
   | { 
       type: 'EXTRACT'; 
       file: File; 
