@@ -64,6 +64,20 @@ export function SettingsPanel({
     });
   };
 
+  const handleOutputFormatChange = (type: ExtractionSettings['outputFormat']['type']) => {
+    onSettingsChange({
+      ...settings,
+      outputFormat: { ...settings.outputFormat, type }
+    });
+  };
+
+  const handleQualityChange = (value: number[]) => {
+    onSettingsChange({
+      ...settings,
+      outputFormat: { ...settings.outputFormat, quality: value[0] }
+    });
+  };
+
   const parseTimeString = (timeStr: string): number => {
     const parts = timeStr.split(':');
     if (parts.length === 3) {
@@ -170,6 +184,46 @@ export function SettingsPanel({
 
         {showAdvanced && (
           <div className="space-y-4 p-4 rounded-lg bg-surface border border-border">
+            {/* Output Format */}
+            <div className="space-y-3">
+              <Label>Output Format</Label>
+              <Select 
+                value={settings.outputFormat.type} 
+                onValueChange={handleOutputFormatChange}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="png">PNG (Lossless)</SelectItem>
+                  <SelectItem value="jpeg">JPEG (Compressed)</SelectItem>
+                  <SelectItem value="png-compressed">PNG (Compressed)</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              {/* Quality slider for JPEG */}
+              {settings.outputFormat.type === 'jpeg' && (
+                <div className="space-y-2">
+                  <Label>JPEG Quality: {settings.outputFormat.quality || 90}%</Label>
+                  <Slider
+                    value={[settings.outputFormat.quality || 90]}
+                    onValueChange={handleQualityChange}
+                    min={10}
+                    max={100}
+                    step={5}
+                    className="w-full"
+                  />
+                </div>
+              )}
+              
+              {/* Format advice */}
+              <div className="text-xs text-muted-foreground bg-muted/30 p-2 rounded">
+                {settings.outputFormat.type === 'png' && '💡 PNG: Best for graphics, text, transparency. Larger files.'}
+                {settings.outputFormat.type === 'jpeg' && '💡 JPEG: Best for photos. Smaller files, no transparency.'}
+                {settings.outputFormat.type === 'png-compressed' && '💡 PNG Compressed: Balanced size/quality for NFTs and web.'}
+              </div>
+            </div>
+
             {/* Max Frames Limit */}
             <div className="space-y-2">
               <Label htmlFor="maxFrames">Max Frames Limit</Label>
@@ -199,7 +253,7 @@ export function SettingsPanel({
                   {settings.naming.pattern
                     .replace('{basename}', metadata?.name?.split('.')[0] || 'video')
                     .replace('{frame}', '1'.padStart(settings.naming.padLength, '0'))
-                    .replace('{timestamp_ms}', '0')}.png
+                    .replace('{timestamp_ms}', '0')}.{settings.outputFormat.type === 'jpeg' ? 'jpg' : 'png'}
                 </span>
               </div>
             </div>

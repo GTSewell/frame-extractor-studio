@@ -138,11 +138,12 @@ function generateExtractionCommands(
 }
 
 // Generate filename from pattern
-function generateFilename(pattern: string, index: number, timestamp: number, basename: string, padLength: number): string {
+function generateFilename(pattern: string, index: number, timestamp: number, basename: string, padLength: number, outputFormat: { type: string }): string {
+  const extension = outputFormat.type === 'jpeg' ? 'jpg' : 'png';
   return pattern
     .replace('{basename}', basename)
     .replace('{frame}', index.toString().padStart(padLength, '0'))
-    .replace('{timestamp_ms}', Math.floor(timestamp * 1000).toString());
+    .replace('{timestamp_ms}', Math.floor(timestamp * 1000).toString()) + '.' + extension;
 }
 
 // Extract frames from file
@@ -191,8 +192,23 @@ async function extractFrames(file: File, settings: ExtractionSettings): Promise<
     
     for (let i = 0; i < Math.min(frameFiles.length, settings.maxFrames); i++) {
       const frameFile = frameFiles[i];
-      const data = await ffmpeg.readFile(frameFile.name);
-      const blob = new Blob([data], { type: 'image/png' });
+      const frameData = await ffmpeg.readFile(frameFile.name);
+      
+      // Convert frame to desired output format
+      const outputArgs = getOutputArgs(settings.outputFormat);
+      const outputExtension = settings.outputFormat.type === 'jpeg' ? 'jpg' : 'png';
+      const outputName = `output_${String(i).padStart(6, '0')}.${outputExtension}`;
+      
+      await ffmpeg.exec([
+        '-i', frameFile.name,
+        '-y',
+        ...outputArgs,
+        outputName
+      ]);
+      
+      const data = await ffmpeg.readFile(outputName);
+      const mimeType = settings.outputFormat.type === 'jpeg' ? 'image/jpeg' : 'image/png';
+      const blob = new Blob([data], { type: mimeType });
       const url = URL.createObjectURL(blob);
       
       const timestamp = (i / (settings.fps || metadata.fps || 30));
@@ -201,8 +217,9 @@ async function extractFrames(file: File, settings: ExtractionSettings): Promise<
         i + 1,
         timestamp,
         basename,
-        settings.naming.padLength
-      ) + '.png';
+        settings.naming.padLength,
+        settings.outputFormat
+      );
       
       const frame: ExtractedFrame = {
         index: i + 1,
@@ -215,13 +232,15 @@ async function extractFrames(file: File, settings: ExtractionSettings): Promise<
       postMessage({ type: 'FRAME', frame } as WorkerOutMessage);
       frameCount++;
       
-      // Clean up frame file
+      // Clean up frame files
       await ffmpeg.deleteFile(frameFile.name);
+      await ffmpeg.deleteFile(outputName);
     }
     
     postMessage({ type: 'COMPLETE', totalFrames: frameCount } as WorkerOutMessage);
     
   } catch (error) {
+    console.error('FFmpeg extraction error:', error);
     postMessage({ 
       type: 'ERROR', 
       error: error instanceof Error ? error.message : 'Unknown error' 
@@ -233,6 +252,18 @@ async function extractFrames(file: File, settings: ExtractionSettings): Promise<
     } catch (e) {
       // Ignore cleanup errors
     }
+  }
+}
+
+function getOutputArgs(outputFormat: { type: string; quality?: number }): string[] {
+  switch (outputFormat.type) {
+    case 'jpeg':
+      return ['-q:v', String(Math.round((100 - (outputFormat.quality || 90)) / 100 * 31) + 2)];
+    case 'png-compressed':
+      return ['-compression_level', '9'];
+    case 'png':
+    default:
+      return [];
   }
 }
 

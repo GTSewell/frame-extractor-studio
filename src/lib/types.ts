@@ -26,6 +26,10 @@ export interface ExtractionSettings {
     padLength: number;
   };
   maxFrames: number;
+  outputFormat: {
+    type: 'png' | 'jpeg' | 'png-compressed';
+    quality?: number; // For JPEG (1-100)
+  };
 }
 
 export interface ExtractedFrame {
@@ -77,5 +81,9 @@ export const DEFAULT_SETTINGS: ExtractionSettings = {
     pattern: '{basename}_f{frame}',
     padLength: 6
   },
-  maxFrames: 2000
+  maxFrames: 2000,
+  outputFormat: {
+    type: 'png',
+    quality: 90
+  }
 };

@@ -4,6 +4,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { FileMetadata } from '@/lib/types';
+import { PrintSizeDisplay } from './PrintSizeDisplay';
 
 interface VideoPreviewProps {
   file: File;
@@ -21,31 +22,26 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
   const [isGif, setIsGif] = useState(false);
 
   useEffect(() => {
+    console.log('[VideoPreview] File loaded:', file.name, file.type);
+    
     const videoUrl = URL.createObjectURL(file);
     setUrl(videoUrl);
     
-    // Check if file is GIF or APNG
-    const isGifFile = file.type === 'image/gif' || file.type === 'image/apng' || file.name.toLowerCase().endsWith('.gif') || file.name.toLowerCase().endsWith('.apng');
-    setIsGif(isGifFile);
+    // Enhanced GIF/APNG detection
+    const fileName = file.name.toLowerCase();
+    const isGifFile = fileName.endsWith('.gif') || file.type === 'image/gif';
+    const isApngFile = fileName.endsWith('.apng') || fileName.endsWith('.png');
     
-    // For GIF/APNG, extract basic metadata immediately
-    if (isGifFile) {
-      const extractedMetadata: FileMetadata = {
-        duration: 1, // Default duration for GIFs
-        width: 0, // Will be updated when image loads
-        height: 0, // Will be updated when image loads
-        fps: undefined,
-        codec: undefined,
-        size: file.size,
-        name: file.name
-      };
-      onMetadataLoad?.(extractedMetadata);
-    }
+    console.log('[VideoPreview] File detection:', { isGifFile, isApngFile, fileName, mimeType: file.type });
+    
+    setIsGif(isGifFile || isApngFile);
+    
+    // For GIF/APNG files, don't call onMetadataLoad here, wait for handleImageLoad
 
     return () => {
       URL.revokeObjectURL(videoUrl);
     };
-  }, [file, onMetadataLoad]);
+  }, [file]);
 
   const handleLoadedMetadata = () => {
     const video = videoRef.current;
@@ -67,18 +63,22 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
 
   const handleImageLoad = () => {
     const img = imgRef.current;
-    if (!img || !isGif) return;
-
+    if (!img) return;
+    
+    console.log('[VideoPreview] Image loaded, extracting metadata');
+    
     const extractedMetadata: FileMetadata = {
-      duration: 1, // Default duration for GIFs
+      duration: 0, // GIFs don't have a reliable duration in the browser
       width: img.naturalWidth,
       height: img.naturalHeight,
-      fps: undefined,
+      fps: file.name.toLowerCase().endsWith('.gif') ? 10 : 24,
       codec: undefined,
       size: file.size,
       name: file.name
     };
-
+    
+    console.log('[VideoPreview] Image metadata extracted:', extractedMetadata);
+    console.log('[VideoPreview] Image dimensions:', extractedMetadata.width, 'x', extractedMetadata.height);
     onMetadataLoad?.(extractedMetadata);
   };
 
@@ -140,6 +140,13 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
             alt="Preview"
             className="w-full h-full object-contain"
             onLoad={handleImageLoad}
+            onError={(e) => {
+              console.error('[VideoPreview] Image error:', e);
+              // Try to extract metadata anyway if possible
+              if (imgRef.current && imgRef.current.naturalWidth > 0) {
+                handleImageLoad();
+              }
+            }}
           />
         ) : (
           <video
@@ -151,6 +158,7 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
             onEnded={() => setIsPlaying(false)}
+            onError={(e) => console.error('[VideoPreview] Video error:', e)}
             preload="metadata"
           />
         )}
@@ -216,7 +224,7 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
 
         {/* Metadata */}
         {metadata && (
-          <div className="pt-4 border-t border-border">
+          <div className="pt-4 border-t border-border space-y-4">
             <div className="grid grid-cols-2 gap-4 text-caption">
               <div>
                 <span className="text-muted-foreground">Dimensions:</span>
@@ -239,6 +247,9 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
                 <span className="ml-2 font-medium">{file.type}</span>
               </div>
             </div>
+            
+            {/* Print Size Display */}
+            <PrintSizeDisplay width={metadata.width} height={metadata.height} />
           </div>
         )}
       </div>
