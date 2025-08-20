@@ -24,65 +24,103 @@ async function check(url: string) {
 async function initFFmpeg() {
   if (ffmpegReady && ffmpeg) return;
 
-  try {
-    if (!basePath) {
-      basePath = (self as any).location?.origin + '/ffmpeg';
-    }
-
-    const base = basePath.replace(/\/$/, '');
-    
-    // Use blob URLs if NOT cross-origin isolated (preview/sandbox),
-    // otherwise plain HTTP same-origin URLs.
-    const useBlob = !(self as any).crossOriginIsolated;
-    let coreURL: string;
-    let wasmURL: string;
-
-    if (useBlob) {
-      // This fetches the files and serves them back as blob: URLs;
-      // avoids odd COEP/CORP interactions in sandboxed previews.
-      coreURL = await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript');
-      wasmURL = await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm');
-    } else {
-      coreURL = `${base}/ffmpeg-core.js`;
-      wasmURL = `${base}/ffmpeg-core.wasm`;
-    }
-
-    ffmpeg = new FFmpeg();
-    
-    ffmpeg.on('log', ({ message }) => {
-      console.log('[FFmpeg]', message);
-    });
-
-    ffmpeg.on('progress', ({ progress, time }) => {
-      if (!cancelled) {
-        (postMessage as any)({
-          type: 'PROGRESS',
-          progress: {
-            frames: Math.floor(time / 40),
-            percent: Math.round(progress * 100),
-            status: 'processing'
-          }
-        } as WorkerOutMessage);
+  const fallbackStrategies = [
+    // Strategy 1: Local files with detected blob/http mode
+    async () => {
+      if (!basePath) {
+        basePath = (self as any).location?.origin + '/ffmpeg';
       }
-    });
+      const base = basePath.replace(/\/$/, '');
+      const useBlob = !(self as any).crossOriginIsolated;
+      
+      // Pre-flight check
+      await check(`${base}/ffmpeg-core.js`);
+      await check(`${base}/ffmpeg-core.wasm`);
+      
+      let coreURL: string;
+      let wasmURL: string;
 
-    await ffmpeg.load({ coreURL, wasmURL });
+      if (useBlob) {
+        coreURL = await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript');
+        wasmURL = await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm');
+      } else {
+        coreURL = `${base}/ffmpeg-core.js`;
+        wasmURL = `${base}/ffmpeg-core.wasm`;
+      }
+      
+      return { coreURL, wasmURL, initMode: useBlob ? 'blob' : 'http', base };
+    },
+    
+    // Strategy 2: CDN fallback with blob URLs
+    async () => {
+      const cdnBase = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+      const coreURL = await toBlobURL(`${cdnBase}/ffmpeg-core.js`, 'text/javascript');
+      const wasmURL = await toBlobURL(`${cdnBase}/ffmpeg-core.wasm`, 'application/wasm');
+      return { coreURL, wasmURL, initMode: 'blob-cdn', base: cdnBase };
+    },
+    
+    // Strategy 3: Alternative CDN with blob URLs
+    async () => {
+      const cdnBase = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
+      const coreURL = await toBlobURL(`${cdnBase}/ffmpeg-core.js`, 'text/javascript');
+      const wasmURL = await toBlobURL(`${cdnBase}/ffmpeg-core.wasm`, 'application/wasm');
+      return { coreURL, wasmURL, initMode: 'blob-cdn2', base: cdnBase };
+    }
+  ];
 
-    ffmpegReady = true;
-    (postMessage as any)({ 
-      type: 'FFMPEG_READY', 
-      initMode: useBlob ? 'blob' : 'http', 
-      base 
-    } as WorkerOutMessage);
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    const useBlob = !(self as any).crossOriginIsolated;
-    (postMessage as any)({ 
-      type: 'ERROR', 
-      error: `ffmpeg.load failed (${useBlob ? 'blob' : 'http'}): ${errorMsg}`
-    } as WorkerOutMessage);
-    throw error;
+  let lastError: Error | null = null;
+  
+  for (const [index, strategy] of fallbackStrategies.entries()) {
+    try {
+      console.log(`[FFmpeg] Trying initialization strategy ${index + 1}...`);
+      const { coreURL, wasmURL, initMode, base } = await strategy();
+      
+      ffmpeg = new FFmpeg();
+      
+      ffmpeg.on('log', ({ message }) => {
+        console.log('[FFmpeg]', message);
+      });
+
+      ffmpeg.on('progress', ({ progress, time }) => {
+        if (!cancelled) {
+          (postMessage as any)({
+            type: 'PROGRESS',
+            progress: {
+              frames: Math.floor(time / 40),
+              percent: Math.round(progress * 100),
+              status: 'processing'
+            }
+          } as WorkerOutMessage);
+        }
+      });
+
+      await ffmpeg.load({ coreURL, wasmURL });
+
+      ffmpegReady = true;
+      console.log(`[FFmpeg] Successfully initialized with strategy ${index + 1} (${initMode})`);
+      (postMessage as any)({ 
+        type: 'FFMPEG_READY', 
+        initMode, 
+        base 
+      } as WorkerOutMessage);
+      return;
+      
+    } catch (error) {
+      console.warn(`[FFmpeg] Strategy ${index + 1} failed:`, error);
+      lastError = error instanceof Error ? error : new Error(String(error));
+      // Clean up failed FFmpeg instance
+      ffmpeg = null;
+      continue;
+    }
   }
+  
+  // All strategies failed
+  const errorMsg = lastError?.message || 'All initialization strategies failed';
+  (postMessage as any)({ 
+    type: 'ERROR', 
+    error: `FFmpeg initialization failed: ${errorMsg}. Check console for details.`
+  } as WorkerOutMessage);
+  throw lastError || new Error('FFmpeg initialization failed');
 }
 
 async function extractFrames(file: File, settings: ExtractionSettings, metadata?: FileMetadata) {

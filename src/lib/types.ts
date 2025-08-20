@@ -80,7 +80,7 @@ export interface PartReady {
 
 export type WorkerOutMessage =
   | { type: 'ALIVE' }
-  | { type: 'FFMPEG_READY'; initMode?: 'blob' | 'http'; base?: string }
+  | { type: 'FFMPEG_READY'; initMode?: 'blob' | 'http' | 'blob-cdn' | 'blob-cdn2'; base?: string }
   | { type: 'READY' }
   | { type: 'META'; metadata: FileMetadata }
   | { type: 'PROGRESS'; progress: ExtractionProgress }

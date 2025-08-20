@@ -42,7 +42,7 @@ export function ExtractionEngine({
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
   const [workerAlive, setWorkerAlive] = useState(false);
   const [ffmpegReady, setFfmpegReady] = useState(false);
-  const [ffmpegInitMode, setFfmpegInitMode] = useState<'blob' | 'http' | null>(null);
+  const [ffmpegInitMode, setFfmpegInitMode] = useState<'blob' | 'http' | 'blob-cdn' | 'blob-cdn2' | null>(null);
   const [lastWorkerError, setLastWorkerError] = useState<string | null>(null);
   const [generatedParts, setGeneratedParts] = useState<Array<{
     partIndex: number;

@@ -4,7 +4,7 @@ type Props = {
   basePath: string; 
   workerAlive: boolean;
   ffmpegReady: boolean;
-  ffmpegInitMode?: 'blob' | 'http' | null;
+  ffmpegInitMode?: 'blob' | 'http' | 'blob-cdn' | 'blob-cdn2' | null;
   lastError?: string | null;
 }
 
@@ -56,6 +56,11 @@ export default function Diagnostics({ basePath, workerAlive, ffmpegReady, ffmpeg
       {coi === false && (
         <div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-yellow-600 dark:text-yellow-400 text-xs">
           <strong>Note:</strong> COI is <em>off</em>; FRAMED is running FFmpeg in single-threaded mode (fallback via blob URLs).
+        </div>
+      )}
+      {ffmpegInitMode?.includes('cdn') && (
+        <div className="p-2 bg-blue-500/10 border border-blue-500/20 rounded text-blue-600 dark:text-blue-400 text-xs">
+          <strong>Info:</strong> Using CDN fallback for FFmpeg core files. Local files may be missing or inaccessible.
         </div>
       )}
       {basePath && (

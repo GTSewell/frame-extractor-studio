@@ -25,9 +25,13 @@ export default defineConfig(({ mode }) => ({
       targets: [
         { src: 'node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.js', dest: 'public/ffmpeg' },
         { src: 'node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.wasm', dest: 'public/ffmpeg' },
+        // Try alternative paths in case the above fails
+        { src: 'node_modules/@ffmpeg/core/dist/ffmpeg-core.js', dest: 'public/ffmpeg' },
+        { src: 'node_modules/@ffmpeg/core/dist/ffmpeg-core.wasm', dest: 'public/ffmpeg' },
       ],
       verbose: true,
       copyOnce: false,
+      hook: 'buildStart',
     }),
     mode === 'development' &&
     componentTagger(),
