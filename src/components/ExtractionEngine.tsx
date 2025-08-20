@@ -209,7 +209,7 @@ export function ExtractionEngine({
               {isExtracting ? 'Extracting Frames...' : 'Ready to Extract'}
             </h4>
             <p className="text-sm text-muted-foreground">
-              {progress.frames} frames • Original {metadata.width}×{metadata.height}
+              {frames.length} frames extracted • Original {metadata.width}×{metadata.height}
             </p>
           </div>
           
