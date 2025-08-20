@@ -1,7 +1,6 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import type { WorkerInMessage, WorkerOutMessage, FileMetadata, ExtractionSettings, ExtractedFrame } from '../types';
-import { GifExtractor } from '../gifExtractor';
 
 console.log('[Worker] Starting FFmpeg worker...');
 
@@ -97,11 +96,23 @@ function generateExtractionCommands(
     commands.push('-t', (settings.endTime - (settings.startTime || 0)).toString());
   }
   
-  // Apply extraction mode
+  // Determine effective FPS for "every" mode to prevent memory issues
+  const getEffectiveFps = () => {
+    if (settings.mode === 'every') {
+      // For "every" mode, limit to reasonable FPS to prevent stalls
+      const originalFps = metadata.fps || 30;
+      // Cap at 30fps for large files to prevent memory issues
+      return Math.min(originalFps, 30);
+    }
+    return settings.fps || metadata.fps || 30;
+  };
+  
+  // Apply extraction mode with improved efficiency
   switch (settings.mode) {
     case 'every':
-      // Extract all frames (limited by maxFrames)
-      commands.push('-vf', `select='not(mod(n\\,1))'`);
+      // Use fps filter instead of problematic select filter
+      const effectiveFps = getEffectiveFps();
+      commands.push('-vf', `fps=${effectiveFps}`);
       break;
     
     case 'fps':
@@ -117,8 +128,14 @@ function generateExtractionCommands(
       break;
     
     case 'range':
-      // Time range already handled above
+      // Use fps for time range mode too
+      commands.push('-vf', `fps=${getEffectiveFps()}`);
       break;
+  }
+  
+  // Apply frame limit to prevent runaway extraction
+  if (settings.maxFrames) {
+    commands.push('-frames:v', settings.maxFrames.toString());
   }
   
   // Apply scaling
@@ -132,19 +149,28 @@ function generateExtractionCommands(
     }
   }
   
-  // Output format
-  commands.push('-f', 'image2', 'frame_%06d.png');
+  // Output format with quality settings
+  const extension = settings.outputFormat?.type === 'jpeg' ? 'jpg' : 'png';
+  
+  if (settings.outputFormat?.type === 'jpeg' && settings.outputFormat.quality) {
+    commands.push('-q:v', Math.round((100 - settings.outputFormat.quality) / 3).toString());
+  }
+  
+  commands.push('-f', 'image2', `frame_%06d.${extension}`);
   
   return commands;
 }
 
-// Generate filename from pattern
-function generateFilename(pattern: string, index: number, timestamp: number, basename: string, padLength: number, outputFormat: { type: string }): string {
-  const extension = outputFormat.type === 'jpeg' ? 'jpg' : 'png';
-  return pattern
-    .replace('{basename}', basename)
-    .replace('{frame}', index.toString().padStart(padLength, '0'))
-    .replace('{timestamp_ms}', Math.floor(timestamp * 1000).toString()) + '.' + extension;
+function getOutputArgs(outputFormat: { type: string; quality?: number }): string[] {
+  switch (outputFormat.type) {
+    case 'jpeg':
+      return ['-q:v', String(Math.round((100 - (outputFormat.quality || 90)) / 100 * 31) + 2)];
+    case 'png-compressed':
+      return ['-compression_level', '9'];
+    case 'png':
+    default:
+      return [];
+  }
 }
 
 // Check if file is a GIF/APNG and handle accordingly
@@ -192,18 +218,6 @@ async function extractGifFrames(file: File, settings: ExtractionSettings): Promi
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
     
-    // Estimate frame count based on settings
-    let frameCount = 1; // At least 1 frame
-    if (settings.mode === 'every') {
-      frameCount = Math.min(settings.maxFrames, 20); // Max 20 frames for GIFs
-    } else if (settings.mode === 'fps' && settings.fps) {
-      frameCount = Math.min(settings.maxFrames, Math.floor(2 * settings.fps)); // 2 seconds worth
-    } else if (settings.mode === 'nth' && settings.nth) {
-      frameCount = Math.min(settings.maxFrames, Math.floor(20 / settings.nth));
-    }
-    
-    console.log(`[Worker] Extracting ${frameCount} frames from GIF`);
-    
     // For now, we'll extract the single static frame
     // In a more advanced implementation, we could parse GIF frames
     ctx.drawImage(img, 0, 0);
@@ -220,17 +234,14 @@ async function extractGifFrames(file: File, settings: ExtractionSettings): Promi
     });
     
     const frameUrl = URL.createObjectURL(blob);
-    const filename = generateFilename(
-      settings.naming.pattern,
-      1,
-      0,
-      basename,
-      settings.naming.padLength,
-      settings.outputFormat
-    );
+    const fileExtension = settings.outputFormat.type === 'jpeg' ? 'jpg' : 'png';
+    const filename = settings.naming.pattern
+      .replace('{basename}', basename)
+      .replace('{frame}', '1'.padStart(settings.naming.padLength, '0'))
+      .replace('{timestamp}', '0') + `.${fileExtension}`;
     
     const frame: ExtractedFrame = {
-      index: 1,
+      index: 0,
       timestamp: 0,
       blob,
       url: frameUrl,
@@ -265,6 +276,19 @@ async function extractFrames(file: File, settings: ExtractionSettings): Promise<
   const inputName = 'input.' + file.name.split('.').pop();
   const basename = file.name.split('.')[0];
   
+  // Set up extraction timeout (5 minutes)
+  const EXTRACTION_TIMEOUT = 5 * 60 * 1000;
+  let timeoutId: number | null = null;
+  let isCompleted = false;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = self.setTimeout(() => {
+      if (!isCompleted) {
+        reject(new Error('Extraction timed out after 5 minutes. Try reducing frame rate or using a smaller time range.'));
+      }
+    }, EXTRACTION_TIMEOUT);
+  });
+  
   try {
     // Write input file
     await ffmpeg.writeFile(inputName, new Uint8Array(await file.arrayBuffer()));
@@ -273,13 +297,14 @@ async function extractFrames(file: File, settings: ExtractionSettings): Promise<
     const metadata = await extractMetadata(file);
     postMessage({ type: 'META', metadata } as WorkerOutMessage);
     
-    // Generate extraction commands
+    // Generate improved extraction commands
     const commands = generateExtractionCommands(inputName, settings, metadata);
+    console.log('[Worker] FFmpeg commands:', commands);
     
     let frameCount = 0;
     let lastProgress = 0;
     
-    // Set up progress tracking
+    // Set up progress tracking with heartbeat
     ffmpeg.on('progress', ({ progress, time }) => {
       const percent = Math.min(progress * 100, 100);
       if (percent - lastProgress >= 1) { // Only update every 1%
@@ -295,46 +320,73 @@ async function extractFrames(file: File, settings: ExtractionSettings): Promise<
       }
     });
     
-    // Execute extraction
-    await ffmpeg.exec(commands);
+    // Execute extraction with timeout protection
+    await Promise.race([
+      ffmpeg.exec(commands),
+      timeoutPromise
+    ]);
+    
+    console.log('[Worker] FFmpeg execution completed');
     
     // Read extracted frames
     const files = await ffmpeg.listDir('/');
-    const frameFiles = files.filter(f => f.name.startsWith('frame_') && f.name.endsWith('.png'));
+    const extension = settings.outputFormat?.type === 'jpeg' ? 'jpg' : 'png';
+    const frameFiles = files.filter(f => 
+      f.name.startsWith('frame_') && (f.name.endsWith('.png') || f.name.endsWith(`.${extension}`))
+    );
     
-    for (let i = 0; i < Math.min(frameFiles.length, settings.maxFrames); i++) {
+    console.log(`[Worker] Found ${frameFiles.length} frame files`);
+    
+    if (frameFiles.length === 0) {
+      throw new Error('No frames were extracted. Please try different settings or check if the video is valid.');
+    }
+    
+    const totalFrames = Math.min(frameFiles.length, settings.maxFrames);
+    
+    for (let i = 0; i < totalFrames; i++) {
       const frameFile = frameFiles[i];
       const frameData = await ffmpeg.readFile(frameFile.name);
       
-      // Convert frame to desired output format
-      const outputArgs = getOutputArgs(settings.outputFormat);
-      const outputExtension = settings.outputFormat.type === 'jpeg' ? 'jpg' : 'png';
-      const outputName = `output_${String(i).padStart(6, '0')}.${outputExtension}`;
+      // Create blob directly from frame data (skip re-encoding if PNG and original format)
+      let blob: Blob;
+      let mimeType: string;
       
-      await ffmpeg.exec([
-        '-i', frameFile.name,
-        '-y',
-        ...outputArgs,
-        outputName
-      ]);
+      if (settings.outputFormat?.type === 'jpeg') {
+        // Convert to JPEG
+        const outputArgs = getOutputArgs(settings.outputFormat);
+        const outputName = `output_${String(i).padStart(6, '0')}.jpg`;
+        
+        await ffmpeg.exec([
+          '-i', frameFile.name,
+          '-y',
+          ...outputArgs,
+          outputName
+        ]);
+        
+        const data = await ffmpeg.readFile(outputName);
+        blob = new Blob([data], { type: 'image/jpeg' });
+        mimeType = 'image/jpeg';
+        
+        // Clean up temp file
+        await ffmpeg.deleteFile(outputName);
+      } else {
+        // Use PNG directly
+        blob = new Blob([frameData], { type: 'image/png' });
+        mimeType = 'image/png';
+      }
       
-      const data = await ffmpeg.readFile(outputName);
-      const mimeType = settings.outputFormat.type === 'jpeg' ? 'image/jpeg' : 'image/png';
-      const blob = new Blob([data], { type: mimeType });
       const url = URL.createObjectURL(blob);
       
-      const timestamp = (i / (settings.fps || metadata.fps || 30));
-      const filename = generateFilename(
-        settings.naming.pattern,
-        i + 1,
-        timestamp,
-        basename,
-        settings.naming.padLength,
-        settings.outputFormat
-      );
+      // Calculate timestamp and filename
+      const timestamp = (i / (metadata.fps || 30)) * 1000;
+      const fileExtension = settings.outputFormat?.type === 'jpeg' ? 'jpg' : 'png';
+      const filename = settings.naming.pattern
+        .replace('{basename}', basename)
+        .replace('{frame}', String(i + 1).padStart(settings.naming.padLength, '0'))
+        .replace('{timestamp}', String(Math.round(timestamp))) + `.${fileExtension}`;
       
       const frame: ExtractedFrame = {
-        index: i + 1,
+        index: i,
         timestamp,
         blob,
         url,
@@ -342,40 +394,56 @@ async function extractFrames(file: File, settings: ExtractionSettings): Promise<
       };
       
       postMessage({ type: 'FRAME', frame } as WorkerOutMessage);
-      frameCount++;
       
-      // Clean up frame files
+      // Update progress
+      frameCount = i + 1;
+      const percent = (frameCount / totalFrames) * 100;
+      postMessage({
+        type: 'PROGRESS',
+        progress: {
+          frames: frameCount,
+          percent,
+          status: 'processing'
+        }
+      } as WorkerOutMessage);
+      
+      // Clean up frame file immediately to save memory
       await ffmpeg.deleteFile(frameFile.name);
-      await ffmpeg.deleteFile(outputName);
+      
+      // Allow browser to breathe every 10 frames
+      if (i % 10 === 0) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
     }
     
-    postMessage({ type: 'COMPLETE', totalFrames: frameCount } as WorkerOutMessage);
+    isCompleted = true;
+    if (timeoutId) clearTimeout(timeoutId);
+    
+    // Clean up input file
+    await ffmpeg.deleteFile(inputName);
+    
+    postMessage({
+      type: 'COMPLETE',
+      totalFrames: frameCount
+    } as WorkerOutMessage);
     
   } catch (error) {
-    console.error('FFmpeg extraction error:', error);
-    postMessage({ 
-      type: 'ERROR', 
-      error: error instanceof Error ? error.message : 'Unknown error' 
-    } as WorkerOutMessage);
-  } finally {
-    // Clean up
+    isCompleted = true;
+    if (timeoutId) clearTimeout(timeoutId);
+    
+    console.error('[Worker] FFmpeg extraction failed:', error);
+    
+    // Clean up files on error
     try {
       await ffmpeg.deleteFile(inputName);
-    } catch (e) {
-      // Ignore cleanup errors
+    } catch (cleanupError) {
+      console.warn('[Worker] Failed to clean up input file:', cleanupError);
     }
-  }
-}
-
-function getOutputArgs(outputFormat: { type: string; quality?: number }): string[] {
-  switch (outputFormat.type) {
-    case 'jpeg':
-      return ['-q:v', String(Math.round((100 - (outputFormat.quality || 90)) / 100 * 31) + 2)];
-    case 'png-compressed':
-      return ['-compression_level', '9'];
-    case 'png':
-    default:
-      return [];
+    
+    postMessage({
+      type: 'ERROR',
+      error: error instanceof Error ? error.message : 'FFmpeg extraction failed'
+    } as WorkerOutMessage);
   }
 }
 
