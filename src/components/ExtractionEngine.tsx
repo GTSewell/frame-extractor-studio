@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { X, Download, Pause, Play } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { estimateFramesAndZip } from '@/lib/estimate';
 import type { 
   FileMetadata, 
   ExtractionSettings, 
@@ -43,7 +44,9 @@ export function ExtractionEngine({
   const resolveReadyRef = useRef<() => void>(() => {});
   const { toast } = useToast();
 
+  // Initialize worker on mount
   useEffect(() => {
+    initializeWorker();
     return () => {
       // Clean up worker on unmount
       if (workerRef.current) {
@@ -252,6 +255,19 @@ export function ExtractionEngine({
     onFramesExtracted(frames);
   }, [frames, onFramesExtracted]);
 
+  // Get estimated frames for button text
+  const getEstimatedFrames = () => {
+    if (!metadata) return 0;
+    try {
+      const estimate = estimateFramesAndZip(metadata, settings);
+      return estimate.frames;
+    } catch {
+      return 0;
+    }
+  };
+
+  const estimatedFrames = getEstimatedFrames();
+
   if (!file) {
     return null;
   }
@@ -311,7 +327,7 @@ export function ExtractionEngine({
                 disabled={!file || !metadata || !workerReady || isExtracting}
               >
                 <Play size={16} />
-                Extract Frames
+                Extract {estimatedFrames > 0 ? `${estimatedFrames.toLocaleString()} Frames` : 'Frames'}
               </Button>
             )}
           </div>
