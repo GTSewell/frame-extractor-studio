@@ -6,14 +6,24 @@ import { Badge } from '@/components/ui/badge';
 import { FileDropzone } from '@/components/FileDropzone';
 import { VideoPreview } from '@/components/VideoPreview';
 import { SettingsPanel } from '@/components/SettingsPanel';
+import { ExtractionEngine } from '@/components/ExtractionEngine';
+import { FramesGrid } from '@/components/FramesGrid';
+import { useDownloadZip } from '@/components/DownloadZip';
 import { Info, Shield, Github } from 'lucide-react';
-import { FileMetadata, ExtractionSettings, DEFAULT_SETTINGS } from '@/lib/types';
+import { FileMetadata, ExtractionSettings, DEFAULT_SETTINGS, ExtractedFrame, ExtractionProgress } from '@/lib/types';
 
 export default function Index() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [metadata, setMetadata] = useState<FileMetadata>();
   const [settings, setSettings] = useState<ExtractionSettings>(DEFAULT_SETTINGS);
   const [estimatedFrames, setEstimatedFrames] = useState(0);
+  const [extractedFrames, setExtractedFrames] = useState<ExtractedFrame[]>([]);
+  const [extractionProgress, setExtractionProgress] = useState<ExtractionProgress>({
+    frames: 0,
+    percent: 0,
+    status: 'idle'
+  });
+  const { createZip } = useDownloadZip();
 
   const handleFileSelect = (file: File) => {
     setSelectedFile(file);
@@ -37,10 +47,24 @@ export default function Index() {
     setEstimatedFrames(Math.min(frameCount, settings.maxFrames));
   };
 
-  const handleExtract = () => {
-    if (!selectedFile || !metadata) return;
-    // TODO: Implement extraction logic with web worker
-    console.log('Extracting frames...', { selectedFile, metadata, settings });
+  const handleFramesExtracted = (frames: ExtractedFrame[]) => {
+    setExtractedFrames(frames);
+  };
+
+  const handleProgressUpdate = (progress: ExtractionProgress) => {
+    setExtractionProgress(progress);
+  };
+
+  const handleDownloadAll = () => {
+    if (extractedFrames.length === 0 || !selectedFile) return;
+    const basename = selectedFile.name.split('.')[0];
+    createZip(extractedFrames, basename, metadata);
+  };
+
+  const handleDownloadSelected = (frames: ExtractedFrame[]) => {
+    if (frames.length === 0 || !selectedFile) return;
+    const basename = selectedFile.name.split('.')[0];
+    createZip(frames, basename, metadata);
   };
 
   return (
@@ -139,36 +163,27 @@ export default function Index() {
                   estimatedSize={estimatedFrames * 1024 * 512} // Rough estimate
                 />
 
-                {/* Extract Button */}
-                {metadata && (
-                  <Card className="p-6">
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h4 className="font-semibold">Ready to extract</h4>
-                          <p className="text-sm text-muted-foreground">
-                            {estimatedFrames} frames • Original {metadata.width}×{metadata.height}
-                          </p>
-                        </div>
-                        <Button 
-                          onClick={handleExtract}
-                          className="bg-gradient-brand hover:opacity-90 text-brand-foreground font-semibold"
-                          size="lg"
-                        >
-                          Extract Frames
-                        </Button>
-                      </div>
-                      
-                      <div className="text-xs text-muted-foreground space-y-1">
-                        <p>• Files are processed entirely in your browser</p>
-                        <p>• Original resolution preserved</p>
-                        <p>• PNG format with lossless quality</p>
-                      </div>
-                    </div>
-                  </Card>
-                )}
+                {/* Extraction Engine */}
+                <ExtractionEngine
+                  file={selectedFile}
+                  metadata={metadata}
+                  settings={settings}
+                  onFramesExtracted={handleFramesExtracted}
+                  onProgressUpdate={handleProgressUpdate}
+                />
               </div>
             </div>
+          )}
+
+          {/* Extracted Frames Grid */}
+          {extractedFrames.length > 0 && (
+            <section className="max-w-7xl mx-auto">
+              <FramesGrid
+                frames={extractedFrames}
+                onDownloadSelected={handleDownloadSelected}
+                onDownloadAll={handleDownloadAll}
+              />
+            </section>
           )}
 
           {/* Features */}

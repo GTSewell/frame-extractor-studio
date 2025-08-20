@@ -109,7 +109,7 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
         />
         
         {/* Overlay controls */}
-        <div className="absolute inset-0 bg-black/30 opacity-0 hover:opacity-100 transition-opacity duration-smooth flex items-center justify-center">
+        <div className="absolute inset-0 bg-black/30 opacity-0 hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
           <Button
             size="lg"
             variant="secondary"

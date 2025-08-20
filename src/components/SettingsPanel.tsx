@@ -192,9 +192,16 @@ export function SettingsPanel({
                 onChange={(e) => handleNamingChange('pattern', e.target.value)}
                 placeholder="{basename}_f{frame}"
               />
-              <p className="text-xs text-muted-foreground">
-                Available tokens: {'{basename}'}, {'{frame}'}, {'{timestamp_ms}'}
-              </p>
+              {/* Naming Preview */}
+              <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded">
+                <span className="font-mono">Preview: </span>
+                <span className="font-mono">
+                  {settings.naming.pattern
+                    .replace('{basename}', metadata?.name?.split('.')[0] || 'video')
+                    .replace('{frame}', '1'.padStart(settings.naming.padLength, '0'))
+                    .replace('{timestamp_ms}', '0')}.png
+                </span>
+              </div>
             </div>
 
             {/* Padding Length */}
