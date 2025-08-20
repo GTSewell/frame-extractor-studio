@@ -1,6 +1,7 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import type { WorkerInMessage, WorkerOutMessage, FileMetadata, ExtractionSettings, ExtractedFrame } from '../types';
+import { GifExtractor } from '../gifExtractor';
 
 console.log('[Worker] Starting FFmpeg worker...');
 
@@ -146,8 +147,119 @@ function generateFilename(pattern: string, index: number, timestamp: number, bas
     .replace('{timestamp_ms}', Math.floor(timestamp * 1000).toString()) + '.' + extension;
 }
 
+// Check if file is a GIF/APNG and handle accordingly
+function isGifOrApng(file: File): boolean {
+  const fileName = file.name.toLowerCase();
+  return fileName.endsWith('.gif') || 
+         fileName.endsWith('.apng') || 
+         file.type === 'image/gif' ||
+         file.type === 'image/apng';
+}
+
+// Extract frames from GIF using Canvas API
+async function extractGifFrames(file: File, settings: ExtractionSettings): Promise<void> {
+  const basename = file.name.split('.')[0];
+  
+  try {
+    console.log('[Worker] Extracting GIF frames using Canvas API');
+    
+    // Create image element to load the GIF
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('Failed to load GIF'));
+      img.src = url;
+    });
+    
+    // Extract metadata
+    const metadata: FileMetadata = {
+      duration: 2, // Estimate 2 seconds for GIFs
+      width: img.naturalWidth,
+      height: img.naturalHeight,
+      fps: 10, // Estimate 10 FPS for GIFs
+      codec: 'gif',
+      size: file.size,
+      name: file.name
+    };
+    
+    postMessage({ type: 'META', metadata } as WorkerOutMessage);
+    
+    // Create canvas for frame extraction
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d')!;
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    
+    // Estimate frame count based on settings
+    let frameCount = 1; // At least 1 frame
+    if (settings.mode === 'every') {
+      frameCount = Math.min(settings.maxFrames, 20); // Max 20 frames for GIFs
+    } else if (settings.mode === 'fps' && settings.fps) {
+      frameCount = Math.min(settings.maxFrames, Math.floor(2 * settings.fps)); // 2 seconds worth
+    } else if (settings.mode === 'nth' && settings.nth) {
+      frameCount = Math.min(settings.maxFrames, Math.floor(20 / settings.nth));
+    }
+    
+    console.log(`[Worker] Extracting ${frameCount} frames from GIF`);
+    
+    // For now, we'll extract the single static frame
+    // In a more advanced implementation, we could parse GIF frames
+    ctx.drawImage(img, 0, 0);
+    
+    // Convert to desired output format
+    const mimeType = settings.outputFormat.type === 'jpeg' ? 'image/jpeg' : 'image/png';
+    const quality = settings.outputFormat.type === 'jpeg' ? (settings.outputFormat.quality || 90) / 100 : undefined;
+    
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error('Failed to convert canvas to blob'));
+      }, mimeType, quality);
+    });
+    
+    const frameUrl = URL.createObjectURL(blob);
+    const filename = generateFilename(
+      settings.naming.pattern,
+      1,
+      0,
+      basename,
+      settings.naming.padLength,
+      settings.outputFormat
+    );
+    
+    const frame: ExtractedFrame = {
+      index: 1,
+      timestamp: 0,
+      blob,
+      url: frameUrl,
+      filename
+    };
+    
+    postMessage({ type: 'FRAME', frame } as WorkerOutMessage);
+    postMessage({ type: 'COMPLETE', totalFrames: 1 } as WorkerOutMessage);
+    
+    URL.revokeObjectURL(url);
+    
+  } catch (error) {
+    console.error('GIF extraction error:', error);
+    postMessage({ 
+      type: 'ERROR', 
+      error: error instanceof Error ? error.message : 'GIF extraction failed' 
+    } as WorkerOutMessage);
+  }
+}
+
 // Extract frames from file
 async function extractFrames(file: File, settings: ExtractionSettings): Promise<void> {
+  // Check if this is a GIF/APNG file
+  if (isGifOrApng(file)) {
+    console.log('[Worker] Detected GIF/APNG file, using Canvas API extraction');
+    return extractGifFrames(file, settings);
+  }
+  
+  // Continue with FFmpeg for video files
   if (!ffmpeg) throw new Error('FFmpeg not initialized');
   
   const inputName = 'input.' + file.name.split('.').pop();

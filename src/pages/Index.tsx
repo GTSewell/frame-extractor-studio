@@ -33,18 +33,51 @@ export default function Index() {
   };
 
   const handleMetadataLoad = (meta: FileMetadata) => {
+    console.log('[Index] Metadata loaded:', meta);
     setMetadata(meta);
-    // Simple frame estimation based on mode
+    
+    // Check if this is a GIF/APNG file
+    const isGifFile = selectedFile?.name.toLowerCase().endsWith('.gif') || 
+                     selectedFile?.name.toLowerCase().endsWith('.apng') ||
+                     selectedFile?.type === 'image/gif';
+    
+    // Frame estimation based on file type and mode
     let frameCount = 0;
-    if (settings.mode === 'every') {
-      frameCount = Math.floor(meta.duration * (meta.fps || 24));
-    } else if (settings.mode === 'fps' && settings.fps) {
-      frameCount = Math.floor(meta.duration * settings.fps);
-    } else if (settings.mode === 'nth' && settings.nth) {
-      const totalFrames = Math.floor(meta.duration * (meta.fps || 24));
-      frameCount = Math.floor(totalFrames / settings.nth);
+    
+    if (isGifFile) {
+      // For GIFs, estimate frames differently since duration might be 0
+      if (settings.mode === 'every') {
+        frameCount = Math.min(20, settings.maxFrames); // Max 20 frames for GIFs
+      } else if (settings.mode === 'fps' && settings.fps) {
+        frameCount = Math.min(Math.floor(2 * settings.fps), settings.maxFrames); // 2 seconds worth
+      } else if (settings.mode === 'nth' && settings.nth) {
+        frameCount = Math.min(Math.floor(20 / settings.nth), settings.maxFrames);
+      } else {
+        frameCount = 1; // At least 1 frame
+      }
+    } else {
+      // For videos, use duration-based calculation
+      const duration = meta.duration || 1; // Fallback to 1 second if duration is 0
+      const fps = meta.fps || 24; // Fallback to 24 FPS
+      
+      if (settings.mode === 'every') {
+        frameCount = Math.floor(duration * fps);
+      } else if (settings.mode === 'fps' && settings.fps) {
+        frameCount = Math.floor(duration * settings.fps);
+      } else if (settings.mode === 'nth' && settings.nth) {
+        const totalFrames = Math.floor(duration * fps);
+        frameCount = Math.floor(totalFrames / settings.nth);
+      } else if (settings.mode === 'range') {
+        const startTime = settings.startTime || 0;
+        const endTime = settings.endTime || duration;
+        const rangeDuration = Math.max(0, endTime - startTime);
+        frameCount = Math.floor(rangeDuration * fps);
+      }
     }
-    setEstimatedFrames(Math.min(frameCount, settings.maxFrames));
+    
+    const estimatedCount = Math.min(Math.max(frameCount, 1), settings.maxFrames);
+    console.log('[Index] Estimated frames:', estimatedCount, 'for file type:', isGifFile ? 'GIF' : 'VIDEO');
+    setEstimatedFrames(estimatedCount);
   };
 
   const handleFramesExtracted = (frames: ExtractedFrame[]) => {

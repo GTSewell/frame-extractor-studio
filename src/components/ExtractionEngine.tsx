@@ -131,10 +131,19 @@ export function ExtractionEngine({
   const startExtraction = async () => {
     if (!file || !metadata) {
       console.log('[ExtractionEngine] Missing file or metadata:', { file: !!file, metadata: !!metadata });
+      toast({
+        title: "Cannot Start Extraction",
+        description: "Please wait for the file metadata to load before extracting frames.",
+        variant: "destructive"
+      });
       return;
     }
     
-    console.log('[ExtractionEngine] Starting extraction...', { file: file.name, settings });
+    console.log('[ExtractionEngine] Starting extraction...', { 
+      file: file.name, 
+      metadata: { width: metadata.width, height: metadata.height, duration: metadata.duration },
+      settings 
+    });
     
     setIsExtracting(true);
     setFrames([]);
@@ -196,8 +205,30 @@ export function ExtractionEngine({
     onFramesExtracted(frames);
   }, [frames, onFramesExtracted]);
 
-  if (!file || !metadata) {
+  if (!file) {
     return null;
+  }
+  
+  // Show loading state if metadata is not yet available
+  if (!metadata) {
+    return (
+      <Card className="p-6">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h4 className="font-semibold">Loading...</h4>
+              <p className="text-sm text-muted-foreground">
+                Processing file metadata...
+              </p>
+            </div>
+          </div>
+          <div className="text-xs text-muted-foreground space-y-1">
+            <p>• Analyzing file structure and properties</p>
+            <p>• This should only take a moment</p>
+          </div>
+        </div>
+      </Card>
+    );
   }
 
   return (
@@ -209,7 +240,8 @@ export function ExtractionEngine({
               {isExtracting ? 'Extracting Frames...' : 'Ready to Extract'}
             </h4>
             <p className="text-sm text-muted-foreground">
-              {frames.length} frames extracted • Original {metadata.width}×{metadata.height}
+              {frames.length} frames extracted • Original {metadata?.width || 0}×{metadata?.height || 0}
+              {metadata && metadata.fps && ` • ${metadata.fps} FPS`}
             </p>
           </div>
           
