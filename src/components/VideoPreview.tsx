@@ -226,6 +226,10 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
         {metadata && (
           <div className="pt-4 border-t border-border space-y-4">
             <div className="grid grid-cols-2 gap-4 text-caption">
+              <div className="col-span-2">
+                <span className="text-muted-foreground">File Name:</span>
+                <span className="ml-2 font-medium">{metadata.name}</span>
+              </div>
               <div>
                 <span className="text-muted-foreground">Dimensions:</span>
                 <span className="ml-2 font-medium">{metadata.width} × {metadata.height}</span>
