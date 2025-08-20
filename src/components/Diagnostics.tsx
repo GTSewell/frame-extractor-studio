@@ -28,19 +28,19 @@ export default function Diagnostics({ basePath, workerAlive, ffmpegReady, lastEr
   }, [basePath]);
 
   const Pill = ({ ok, label }: { ok: boolean | null; label: string }) => (
-    <span className={`px-2 py-0.5 text-xs rounded-full ${
+    <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
       ok === null 
         ? 'bg-muted text-muted-foreground' 
         : ok 
-          ? 'bg-emerald-500/20 text-emerald-300' 
-          : 'bg-destructive/20 text-destructive'
+          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
+          : 'bg-destructive/20 text-destructive border border-destructive/30'
     }`}>
       {label}: {ok === null ? '…' : ok ? 'OK' : 'FAIL'}
     </span>
   );
 
   return (
-    <div className="mt-2 space-y-1 text-xs opacity-80">
+    <div className="mt-2 space-y-2 text-xs">
       <div className="flex gap-2 flex-wrap">
         <Pill ok={coreOk} label="FFmpeg Core" />
         <Pill ok={coi ?? null} label="COI" />
@@ -48,8 +48,18 @@ export default function Diagnostics({ basePath, workerAlive, ffmpegReady, lastEr
         <Pill ok={ffmpegReady} label="FFmpeg" />
       </div>
       {!!lastError && (
-        <div className="text-destructive/90 text-xs">
-          Last error: {lastError}
+        <div className="p-2 bg-destructive/10 border border-destructive/20 rounded text-destructive/90 text-xs">
+          <strong>Error:</strong> {lastError}
+        </div>
+      )}
+      {coi === false && (
+        <div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-yellow-600 dark:text-yellow-400 text-xs">
+          <strong>Note:</strong> COI (Cross-Origin Isolation) failed but FFmpeg can still work in single-threaded mode.
+        </div>
+      )}
+      {basePath && (
+        <div className="text-muted-foreground text-xs opacity-60">
+          Core files: {basePath}/
         </div>
       )}
     </div>

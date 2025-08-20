@@ -22,12 +22,12 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     copy({
-      hook: 'buildStart',
       targets: [
         { src: 'node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.js', dest: 'public/ffmpeg' },
         { src: 'node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.wasm', dest: 'public/ffmpeg' },
       ],
       verbose: true,
+      copyOnce: false,
     }),
     mode === 'development' &&
     componentTagger(),

@@ -12,46 +12,61 @@ let cancelled = false;
 (postMessage as any)({ type: 'ALIVE' } as WorkerOutMessage);
 
 async function check(url: string) {
-  const r = await fetch(url, { method: 'HEAD', cache: 'no-cache' });
-  if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+  try {
+    const r = await fetch(url, { method: 'HEAD', cache: 'no-cache' });
+    if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+    return true;
+  } catch (error) {
+    throw new Error(`Failed to fetch ${url}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 async function initFFmpeg() {
   if (ffmpegReady && ffmpeg) return;
 
-  if (!basePath) {
-    basePath = (self as any).location?.origin + '/ffmpeg';
-  }
-
-  const coreURL = `${basePath}/ffmpeg-core.js`;
-  const wasmURL = `${basePath}/ffmpeg-core.wasm`;
-
-  await check(coreURL);
-  await check(wasmURL);
-
-  ffmpeg = new FFmpeg();
-  
-  ffmpeg.on('log', ({ message }) => {
-    console.log(message);
-  });
-
-  ffmpeg.on('progress', ({ progress, time }) => {
-    if (!cancelled) {
-      (postMessage as any)({
-        type: 'PROGRESS',
-        progress: {
-          frames: Math.floor(time / 40),
-          percent: Math.round(progress * 100),
-          status: 'processing'
-        }
-      } as WorkerOutMessage);
+  try {
+    if (!basePath) {
+      basePath = (self as any).location?.origin + '/ffmpeg';
     }
-  });
 
-  await ffmpeg.load({ coreURL, wasmURL });
+    const coreURL = `${basePath}/ffmpeg-core.js`;
+    const wasmURL = `${basePath}/ffmpeg-core.wasm`;
 
-  ffmpegReady = true;
-  (postMessage as any)({ type: 'FFMPEG_READY' } as WorkerOutMessage);
+    // Check if core files are accessible
+    await check(coreURL);
+    await check(wasmURL);
+
+    ffmpeg = new FFmpeg();
+    
+    ffmpeg.on('log', ({ message }) => {
+      console.log('[FFmpeg]', message);
+    });
+
+    ffmpeg.on('progress', ({ progress, time }) => {
+      if (!cancelled) {
+        (postMessage as any)({
+          type: 'PROGRESS',
+          progress: {
+            frames: Math.floor(time / 40),
+            percent: Math.round(progress * 100),
+            status: 'processing'
+          }
+        } as WorkerOutMessage);
+      }
+    });
+
+    await ffmpeg.load({ coreURL, wasmURL });
+
+    ffmpegReady = true;
+    (postMessage as any)({ type: 'FFMPEG_READY' } as WorkerOutMessage);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    (postMessage as any)({ 
+      type: 'ERROR', 
+      error: `FFmpeg initialization failed: ${errorMsg}. Make sure FFmpeg core files are available at ${basePath}/`
+    } as WorkerOutMessage);
+    throw error;
+  }
 }
 
 async function extractFrames(file: File, settings: ExtractionSettings, metadata?: FileMetadata) {
