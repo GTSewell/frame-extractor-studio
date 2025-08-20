@@ -35,6 +35,7 @@ export function ExtractionEngine({
     status: 'idle'
   });
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
+  const [workerReady, setWorkerReady] = useState(false);
   const workerRef = useRef<Worker | null>(null);
   const { toast } = useToast();
 
@@ -54,6 +55,7 @@ export function ExtractionEngine({
       workerRef.current.terminate();
     }
 
+    setWorkerReady(false);
     workerRef.current = new Worker(
       new URL('../lib/ffmpeg/worker.ts', import.meta.url),
       { type: 'module' }
@@ -66,6 +68,7 @@ export function ExtractionEngine({
       switch (type) {
         case 'READY':
           console.log('[ExtractionEngine] FFmpeg worker ready');
+          setWorkerReady(true);
           toast({
             title: "FFmpeg Ready",
             description: "Extraction engine initialized successfully."
@@ -84,9 +87,10 @@ export function ExtractionEngine({
           break;
 
         case 'FRAME':
-          const frame = event.data.frame;
-          console.log('[ExtractionEngine] Frame received:', frame.index);
-          setFrames(prev => [...prev, frame]);
+          const f = event.data.frame;
+          console.log('[ExtractionEngine] Frame received:', f.index);
+          const url = URL.createObjectURL(f.blob);
+          setFrames(prev => [...prev, { ...f, url }]);
           break;
 
         case 'COMPLETE':
@@ -156,19 +160,29 @@ export function ExtractionEngine({
     
     try {
       // Initialize worker if needed
-      if (!workerRef.current) {
+      if (!workerRef.current || !workerReady) {
         console.log('[ExtractionEngine] Creating new worker...');
         initializeWorker();
-        // Wait for worker to initialize
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Wait for worker to be ready
+        await new Promise<void>((resolve) => {
+          const checkReady = () => {
+            if (workerReady) {
+              resolve();
+            } else {
+              setTimeout(checkReady, 100);
+            }
+          };
+          checkReady();
+        });
       }
       
-      // Send extraction command
+      // Send extraction command with metadata
       console.log('[ExtractionEngine] Sending EXTRACT command to worker...');
       workerRef.current?.postMessage({
         type: 'EXTRACT',
         file,
-        settings
+        settings,
+        metadata
       } as WorkerInMessage);
     } catch (error) {
       console.error('[ExtractionEngine] Failed to start extraction:', error);

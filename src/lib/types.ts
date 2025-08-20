@@ -55,6 +55,7 @@ export type WorkerInMessage =
       type: 'EXTRACT'; 
       file: File; 
       settings: ExtractionSettings;
+      metadata?: FileMetadata;
     }
   | { type: 'CANCEL' };
 
