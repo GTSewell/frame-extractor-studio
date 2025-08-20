@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { AlertTriangle, Settings } from 'lucide-react';
 import { ExtractionSettings, FileMetadata, DEFAULT_SETTINGS } from '@/lib/types';
+import { ProcessingModeSelector } from '@/components/ProcessingModeSelector';
 
 interface SettingsPanelProps {
   settings: ExtractionSettings;
@@ -103,6 +104,12 @@ export function SettingsPanel({
         <Settings size={20} />
         <h3 className="text-title">Extraction Settings</h3>
       </div>
+
+      {/* Processing Engine */}
+      <ProcessingModeSelector 
+        settings={settings}
+        onChange={onSettingsChange}
+      />
 
       {/* Extraction Mode */}
       <div className="space-y-3">

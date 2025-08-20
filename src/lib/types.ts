@@ -19,6 +19,7 @@ export interface SplitExport {
 
 export interface ExtractionSettings {
   mode: 'every' | 'fps' | 'nth' | 'range';
+  processingMode: 'auto' | 'webcodecs' | 'image-decoder' | 'ffmpeg';
   fps?: number;
   nth?: number;
   startTime?: number;
@@ -99,6 +100,7 @@ export const SUPPORTED_FORMATS = {
 
 export const DEFAULT_SETTINGS: ExtractionSettings = {
   mode: 'every',
+  processingMode: 'auto',
   scale: { mode: 'original' },
   naming: {
     pattern: '{basename}_f{frame}',
