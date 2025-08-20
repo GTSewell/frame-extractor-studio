@@ -22,16 +22,13 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     copy({
+      hook: 'buildStart',
       targets: [
-        { src: 'node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.js', dest: 'public/ffmpeg' },
-        { src: 'node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.wasm', dest: 'public/ffmpeg' },
-        // Try alternative paths in case the above fails
-        { src: 'node_modules/@ffmpeg/core/dist/ffmpeg-core.js', dest: 'public/ffmpeg' },
-        { src: 'node_modules/@ffmpeg/core/dist/ffmpeg-core.wasm', dest: 'public/ffmpeg' },
+        // Use ESM build instead of UMD for proper import() support
+        { src: 'node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.js', dest: 'public/ffmpeg' },
+        { src: 'node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.wasm', dest: 'public/ffmpeg' },
       ],
       verbose: true,
-      copyOnce: false,
-      hook: 'buildStart',
     }),
     mode === 'development' &&
     componentTagger(),
