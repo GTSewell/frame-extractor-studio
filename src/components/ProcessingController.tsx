@@ -112,7 +112,7 @@ export function ProcessingController({
         break;
     }
 
-    newWorker.onmessage = (event: MessageEvent<WorkerOutMessage>) => {
+    newWorker.onmessage = (event: MessageEvent<WorkerOutMessage | any>) => {
       const { type } = event.data;
       
       switch (type) {
@@ -123,17 +123,32 @@ export function ProcessingController({
           }
           break;
 
+        case 'ID_READY':
+          // ImageDecoder worker is ready
+          break;
+
         case 'FFMPEG_READY':
         case 'READY':
           // Worker is ready
           break;
 
         case 'PROGRESS':
-          onProgressUpdate?.((event.data as any).progress);
+          if (selectedEngine === 'image-decoder') {
+            // ImageDecoder worker sends progress differently
+            onProgressUpdate?.({
+              frames: event.data.frames,
+              percent: event.data.percent,
+              status: 'processing'
+            });
+          } else {
+            onProgressUpdate?.((event.data as any).progress);
+          }
           break;
 
         case 'FRAME':
-          const frame = (event.data as any).frame;
+          const frame = selectedEngine === 'image-decoder' 
+            ? { ...event.data.frame, url: URL.createObjectURL(event.data.frame.blob) }
+            : (event.data as any).frame;
           setFrames(prev => [...prev, frame]);
           break;
 
@@ -183,6 +198,66 @@ export function ProcessingController({
           break;
 
         case 'ERROR':
+          // Auto-fallback for ImageDecoder errors
+          if (selectedEngine === 'image-decoder' && file) {
+            toast({
+              title: 'ImageDecoder issue',
+              description: `${event.data.error}. Falling back to FFmpeg...`
+            });
+            
+            // Terminate current worker
+            newWorker.terminate();
+            
+            // Create FFmpeg worker as fallback
+            const fallbackWorker = new FfmpegWorker();
+            setSelectedEngine('ffmpeg');
+            
+            fallbackWorker.onmessage = (fallbackEvent: MessageEvent<WorkerOutMessage>) => {
+              // Handle FFmpeg worker messages with same logic as above
+              const { type: fallbackType } = fallbackEvent.data;
+              
+              switch (fallbackType) {
+                case 'ALIVE':
+                  fallbackWorker.postMessage({ type: 'INIT', basePath } as WorkerInMessage);
+                  break;
+                case 'FFMPEG_READY':
+                  fallbackWorker.postMessage({
+                    type: 'EXTRACT',
+                    file,
+                    settings,
+                    metadata
+                  } as WorkerInMessage);
+                  break;
+                case 'PROGRESS':
+                  onProgressUpdate?.((fallbackEvent.data as any).progress);
+                  break;
+                case 'FRAME':
+                  const fallbackFrame = (fallbackEvent.data as any).frame;
+                  setFrames(prev => [...prev, fallbackFrame]);
+                  break;
+                case 'COMPLETE':
+                  setEngineStatus('ready');
+                  onFramesExtracted?.(frames);
+                  toast({
+                    title: "Extraction Complete!",
+                    description: `Successfully extracted ${(fallbackEvent.data as any).totalFrames} frames using FFmpeg fallback`,
+                  });
+                  break;
+                case 'ERROR':
+                  setEngineStatus('error');
+                  toast({
+                    title: "Processing Failed",
+                    description: `FFmpeg fallback error: ${(fallbackEvent.data as any).error}`,
+                    variant: "destructive",
+                  });
+                  break;
+              }
+            };
+            
+            setWorker(fallbackWorker);
+            return;
+          }
+          
           setEngineStatus('error');
           toast({
             title: "Processing Failed",
@@ -231,12 +306,21 @@ export function ProcessingController({
       setFrames([]);
       setParts([]);
 
-      worker.postMessage({
-        type: 'EXTRACT',
-        file,
-        settings,
-        metadata
-      } as WorkerInMessage);
+      if (selectedEngine === 'image-decoder') {
+        worker.postMessage({
+          type: 'EXTRACT_IMGDEC',
+          file,
+          settings,
+          metadata
+        });
+      } else {
+        worker.postMessage({
+          type: 'EXTRACT',
+          file,
+          settings,
+          metadata
+        } as WorkerInMessage);
+      }
 
     } catch (error) {
       console.error('Failed to start extraction:', error);

@@ -1,208 +1,126 @@
-import JSZip from 'jszip';
-import type { WorkerInMessage, WorkerOutMessage, ExtractionSettings, FileMetadata, ExtractedFrame } from '@/lib/types';
+// ImageDecoder-based extractor for GIF/APNG; streams PNGs frame-by-frame.
+// Runs entirely in a Worker to keep UI responsive.
 
-let cancelled = false;
+type InMsg =
+  | { type: 'EXTRACT_IMGDEC'; file: File; settings: any; metadata?: any }
+  | { type: 'CANCEL' };
 
-// Post ALIVE immediately so the UI knows the worker booted
-(postMessage as any)({ type: 'ALIVE' } as WorkerOutMessage);
+type OutMsg =
+  | { type: 'ID_READY' }
+  | { type: 'PROGRESS'; frames: number; percent: number }
+  | { type: 'FRAME'; frame: { index: number; timestamp: number; filename: string; blob: Blob } }
+  | { type: 'COMPLETE'; totalFrames: number }
+  | { type: 'ERROR'; error: string };
 
-async function extractFramesFromImage(file: File, settings: ExtractionSettings, metadata?: FileMetadata) {
-  if (!('ImageDecoder' in self)) {
-    throw new Error('ImageDecoder not supported in this browser');
-  }
+(postMessage as any)({ type: 'ID_READY' } as OutMsg);
 
-  cancelled = false;
-  
-  // Check if the image type is supported
-  const isSupported = await (ImageDecoder as any).isTypeSupported(file.type);
-  if (!isSupported) {
-    throw new Error(`Image type ${file.type} not supported by ImageDecoder`);
-  }
+const supports = (self as any).ImageDecoder && (self as any).OffscreenCanvas;
+function err(msg: string) { (postMessage as any)({ type: 'ERROR', error: msg } as OutMsg); }
 
-  const arrayBuffer = await file.arrayBuffer();
-  const decoder = new (ImageDecoder as any)({ data: arrayBuffer, type: file.type });
-  
-  const track = decoder.tracks.selectedTrack;
-  if (!track) {
-    throw new Error('No track found in image');
-  }
+onmessage = async (evt: MessageEvent<InMsg>) => {
+  const msg = evt.data;
+  try {
+    if (msg.type === 'CANCEL') { (self as any).close(); return; }
+    if (msg.type !== 'EXTRACT_IMGDEC') return;
 
-  const totalFrames = Math.min(track.frameCount, settings.maxFrames);
-  console.log(`ImageDecoder: Processing ${totalFrames} frames from ${file.name}`);
+    if (!supports) { err('ImageDecoder/OffscreenCanvas not supported'); return; }
 
-  const frames: ExtractedFrame[] = [];
-  const zip = new JSZip();
+    const { file, settings } = msg;
+    // Safety: only run for GIF/APNG/WebP animated types
+    const mime = (file.type || '').toLowerCase();
+    if (!/^image\/(gif|apng|png|webp)$/.test(mime)) { err(`Unsupported type for ImageDecoder: ${mime}`); return; }
 
-  // Apply frame selection based on settings
-  let frameIndices: number[] = [];
-  
-  if (settings.mode === 'every') {
-    frameIndices = Array.from({ length: totalFrames }, (_, i) => i);
-  } else if (settings.mode === 'nth' && settings.nth) {
-    for (let i = 0; i < totalFrames; i += settings.nth) {
-      frameIndices.push(i);
-    }
-  } else if (settings.mode === 'fps' && settings.fps && metadata?.fps) {
-    const step = Math.max(1, Math.round(metadata.fps / settings.fps));
-    for (let i = 0; i < totalFrames; i += step) {
-      frameIndices.push(i);
-    }
-  } else {
-    // Default to every frame
-    frameIndices = Array.from({ length: totalFrames }, (_, i) => i);
-  }
+    const buf = await file.arrayBuffer();
+    // Some browsers prefer BufferSource (Uint8Array) instead of ArrayBuffer directly
+    const data = new Uint8Array(buf);
 
-  // Apply maxFrames limit
-  frameIndices = frameIndices.slice(0, settings.maxFrames);
+    // Init decoder
+    // @ts-ignore
+    const decoder = new (self as any).ImageDecoder({ data, type: mime });
+    const track = decoder.tracks?.selectedTrack;
+    // frameCount occasionally undefined on some builds; fall back to probing.
+    let frameCount = (track && typeof track.frameCount === 'number') ? track.frameCount : NaN;
 
-  for (const [processedIndex, frameIndex] of frameIndices.entries()) {
-    if (cancelled) break;
-
-    try {
-      const { image } = await decoder.decode({ frameIndex });
-      
-      // Create canvas and draw the image
-      const canvas = new OffscreenCanvas(image.displayWidth, image.displayHeight);
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        image.close();
-        throw new Error('Could not get canvas context');
+    // Probe if needed (decode until it throws RangeError)
+    if (!Number.isFinite(frameCount)) {
+      let i = 0;
+      try {
+        for (;; i++) { await decoder.decode({ frameIndex: i, completeFramesOnly: true }); }
+      } catch {
+        frameCount = i; // first failure indicates no more frames
       }
+      // reset by rebuilding decoder (cheap for small files)
+      // @ts-ignore
+      decoder.close?.();
+      // @ts-ignore
+      const decoder2 = new (self as any).ImageDecoder({ data, type: mime });
+      (decoder as any) = decoder2;
+    }
 
-      // Apply scaling if needed
-      let finalWidth = image.displayWidth;
-      let finalHeight = image.displayHeight;
-      
-      if (settings.scale?.mode === 'custom' && settings.scale.width && settings.scale.height) {
-        finalWidth = settings.scale.width;
-        finalHeight = settings.scale.height;
-        canvas.width = finalWidth;
-        canvas.height = finalHeight;
-        ctx.drawImage(image, 0, 0, finalWidth, finalHeight);
-      } else {
-        ctx.drawImage(image, 0, 0);
+    if (!frameCount || frameCount < 1) { err('No frames detected'); return; }
+
+    // Dimensions
+    const dw = (track as any)?.frameSize?.width || (track as any)?.codedWidth || (track as any)?.displayWidth || 0;
+    const dh = (track as any)?.frameSize?.height || (track as any)?.codedHeight || (track as any)?.displayHeight || 0;
+    const width = dw || (msg.metadata?.width ?? 0);
+    const height = dh || (msg.metadata?.height ?? 0);
+    if (!width || !height) { err('Could not determine frame size'); return; }
+
+    const canvas = new (self as any).OffscreenCanvas(width, height);
+    const ctx = canvas.getContext('2d', { willReadFrequently: false });
+    if (!ctx) { err('2D canvas unavailable in worker'); return; }
+
+    // Watchdog: if we don't emit any frame in N seconds, abort so UI can fallback
+    const TIMEOUT_MS = 8000;
+    let lastTick = Date.now();
+    let watchdog: any = setInterval(() => {
+      if (Date.now() - lastTick > TIMEOUT_MS) {
+        clearInterval(watchdog);
+        err('ImageDecoder stalled (watchdog)');
       }
+    }, 1000);
 
-      // Convert to blob
-      const outputFormat = settings.outputFormat?.type === 'jpeg' ? 'image/jpeg' : 'image/png';
-      const quality = settings.outputFormat?.type === 'jpeg' ? (settings.outputFormat.quality || 90) / 100 : undefined;
-      
-      const blob = await canvas.convertToBlob({ 
-        type: outputFormat,
-        quality 
-      });
+    const assumedFps = msg.metadata?.fps || 10;
+    const baseName = (msg.metadata?.name || file.name).replace(/\.[^.]+$/, '');
+    const outExt = (settings?.outputFormat?.type === 'jpeg') ? 'jpg' : 'png';
 
-      const filename = `frame_${String(frameIndex + 1).padStart(settings.naming.padLength, '0')}.${outputFormat === 'image/jpeg' ? 'jpg' : 'png'}`;
-      const timestamp = frameIndex * (1000 / (metadata?.fps || 30)); // Approximate timestamp
+    for (let i = 0; i < frameCount; i++) {
+      // Important: completeFramesOnly=true ensures proper disposal/composition across frames.
+      const res = await (decoder as any).decode({ frameIndex: i, completeFramesOnly: true });
+      const img = res?.image;
+      if (!img) { clearInterval(watchdog); err(`Decode returned no image @ frame ${i}`); return; }
 
-      const frame: ExtractedFrame = {
-        index: frameIndex,
-        timestamp,
-        blob,
-        url: URL.createObjectURL(blob),
-        filename
-      };
+      // Draw & encode
+      ctx.clearRect(0, 0, width, height);
+      // ImageDecoder returns ImageBitmap in most browsers
+      ctx.drawImage(img, 0, 0);
+      // @ts-ignore
+      const blob: Blob = await canvas.convertToBlob({ type: outExt === 'jpg' ? 'image/jpeg' : 'image/png' });
 
-      frames.push(frame);
-      zip.file(filename, blob);
+      const filename = `${baseName}_f${String(i).padStart(6, '0')}.${outExt}`;
+      const timestamp = Math.round((i / (assumedFps || 10)) * 1000);
 
-      // Post frame
+      // Stream out immediately
       (postMessage as any)({
         type: 'FRAME',
-        frame
-      } as WorkerOutMessage);
+        frame: { index: i, timestamp, filename, blob }
+      } as OutMsg, [blob as any]);
 
-      // Post progress
-      const progress = Math.round(((processedIndex + 1) / frameIndices.length) * 100);
-      (postMessage as any)({
-        type: 'PROGRESS',
-        progress: {
-          frames: processedIndex + 1,
-          percent: progress,
-          status: 'processing'
-        }
-      } as WorkerOutMessage);
-
-      image.close();
-
-    } catch (error) {
-      console.error(`Error processing frame ${frameIndex}:`, error);
-      // Continue with next frame
-    }
-  }
-
-  if (!cancelled && frames.length > 0) {
-    // Handle split export
-    if (settings.split?.enabled && settings.split.framesPerPart > 0) {
-      const framesPerPart = settings.split.framesPerPart;
-      const totalParts = Math.ceil(frames.length / framesPerPart);
-
-      for (let partIndex = 0; partIndex < totalParts; partIndex++) {
-        const startIdx = partIndex * framesPerPart;
-        const endIdx = Math.min(startIdx + framesPerPart, frames.length);
-        const partFrames = frames.slice(startIdx, endIdx);
-
-        const partZip = new JSZip();
-        for (const frame of partFrames) {
-          partZip.file(frame.filename, frame.blob);
-        }
-
-        const zipBlob = await partZip.generateAsync({ type: 'blob' });
-        const basename = file.name.replace(/\.[^/.]+$/, '');
-        const partFilename = `${basename}_part_${partIndex + 1}_of_${totalParts}.zip`;
-
-        (postMessage as any)({
-          type: 'PART_READY',
-          partIndex: partIndex + 1,
-          totalParts,
-          startFrame: startIdx,
-          endFrame: endIdx - 1,
-          filename: partFilename,
-          zip: zipBlob
-        } as WorkerOutMessage);
+      // Progress
+      lastTick = Date.now();
+      if ((i + 1) % 2 === 0 || i === frameCount - 1) {
+        const percent = Math.round(((i + 1) / frameCount) * 100);
+        (postMessage as any)({ type: 'PROGRESS', frames: i + 1, percent } as OutMsg);
       }
-    } else {
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      const basename = file.name.replace(/\.[^/.]+$/, '');
-      const filename = `${basename}_frames.zip`;
 
-      (postMessage as any)({
-        type: 'PART_READY',
-        partIndex: 1,
-        totalParts: 1,
-        startFrame: 0,
-        endFrame: frames.length - 1,
-        filename,
-        zip: zipBlob
-      } as WorkerOutMessage);
+      // Release per-frame image
+      try { (img as any).close?.(); } catch {}
     }
 
-    (postMessage as any)({
-      type: 'COMPLETE',
-      totalFrames: frames.length
-    } as WorkerOutMessage);
-  }
-
-  decoder.close?.();
-}
-
-self.onmessage = async (evt: MessageEvent<WorkerInMessage>) => {
-  try {
-    const msg = evt.data;
-
-    if (msg.type === 'EXTRACT') {
-      await extractFramesFromImage(msg.file, msg.settings, msg.metadata);
-      return;
-    }
-
-    if (msg.type === 'CANCEL') {
-      cancelled = true;
-      (self as any).close();
-    }
-  } catch (err: any) {
-    (postMessage as any)({
-      type: 'ERROR',
-      error: err?.message || String(err)
-    } as WorkerOutMessage);
+    clearInterval(watchdog);
+    try { (decoder as any).close?.(); } catch {}
+    (postMessage as any)({ type: 'COMPLETE', totalFrames: frameCount } as OutMsg);
+  } catch (e: any) {
+    err(e?.message || String(e));
   }
 };
