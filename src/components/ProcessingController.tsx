@@ -146,10 +146,15 @@ export function ProcessingController({
           break;
 
         case 'FRAME':
-          const frame = selectedEngine === 'image-decoder' 
-            ? { ...event.data.frame, url: URL.createObjectURL(event.data.frame.blob) }
-            : (event.data as any).frame;
-          setFrames(prev => [...prev, frame]);
+          if (selectedEngine === 'image-decoder') {
+            const f = event.data.frame as { index: number; filename: string; timestamp: number; blob?: Blob; ab?: ArrayBuffer; mime: string };
+            const blob = f.blob ?? new Blob([new Uint8Array(f.ab!)], { type: f.mime || 'image/png' });
+            const url = URL.createObjectURL(blob);
+            setFrames(prev => [...prev, { ...f, blob, url }]);
+          } else {
+            const frame = (event.data as any).frame;
+            setFrames(prev => [...prev, frame]);
+          }
           break;
 
         case 'PART_READY':
@@ -307,6 +312,72 @@ export function ProcessingController({
       setParts([]);
 
       if (selectedEngine === 'image-decoder') {
+        // Add first-frame watchdog for ImageDecoder
+        const firstFrameTimer = setTimeout(() => {
+          toast({
+            title: 'Slow decoder',
+            description: 'Switching to FFmpeg for this file.'
+          });
+          worker.terminate();
+          // Create FFmpeg worker as fallback
+          const fallbackWorker = new FfmpegWorker();
+          setSelectedEngine('ffmpeg');
+          
+          fallbackWorker.onmessage = (fallbackEvent: MessageEvent<WorkerOutMessage>) => {
+            const { type: fallbackType } = fallbackEvent.data;
+            
+            switch (fallbackType) {
+              case 'ALIVE':
+                fallbackWorker.postMessage({ type: 'INIT', basePath } as WorkerInMessage);
+                break;
+              case 'FFMPEG_READY':
+                fallbackWorker.postMessage({
+                  type: 'EXTRACT',
+                  file,
+                  settings,
+                  metadata
+                } as WorkerInMessage);
+                break;
+              case 'PROGRESS':
+                onProgressUpdate?.((fallbackEvent.data as any).progress);
+                break;
+              case 'FRAME':
+                const fallbackFrame = (fallbackEvent.data as any).frame;
+                setFrames(prev => [...prev, fallbackFrame]);
+                break;
+              case 'COMPLETE':
+                setEngineStatus('ready');
+                onFramesExtracted?.(frames);
+                toast({
+                  title: "Extraction Complete!",
+                  description: `Successfully extracted ${(fallbackEvent.data as any).totalFrames} frames using FFmpeg fallback`,
+                });
+                break;
+              case 'ERROR':
+                setEngineStatus('error');
+                toast({
+                  title: "Processing Failed",
+                  description: `FFmpeg fallback error: ${(fallbackEvent.data as any).error}`,
+                  variant: "destructive",
+                });
+                break;
+            }
+          };
+          
+          setWorker(fallbackWorker);
+        }, 6000);
+
+        // Clear timer when first frame arrives
+        const originalOnMessage = worker.onmessage;
+        worker.onmessage = (event) => {
+          if (event.data?.type === 'FRAME') {
+            clearTimeout(firstFrameTimer);
+          }
+          if (originalOnMessage) {
+            originalOnMessage.call(worker, event);
+          }
+        };
+
         worker.postMessage({
           type: 'EXTRACT_IMGDEC',
           file,
