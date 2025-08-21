@@ -30,15 +30,15 @@ onmessage = async (evt: MessageEvent<InMsg>) => {
     }
 
     const { file, settings, metadata } = msg;
-    const mime = (file.type || '').toLowerCase();
-    if (!/^image\/(gif|apng|png|webp)$/.test(mime)) {
-      (postMessage as any)({ type: 'ERROR', error: `Unsupported type for ImageDecoder: ${mime}` } as OutMsg);
+    const hintedType = (settings && settings._forceType) || file.type || 'image/gif';
+    if (!/^image\/(gif|apng|png|webp)$/.test(hintedType)) {
+      (postMessage as any)({ type: 'ERROR', error: `Unsupported type for ImageDecoder: ${hintedType}` } as OutMsg);
       return;
     }
 
     const buf = await file.arrayBuffer();
     // @ts-ignore
-    const decoder = new ImageDecoder({ data: buf, type: mime });
+    const decoder = new ImageDecoder({ data: buf, type: hintedType });
 
     // ✅ Wait for tracks to be ready; otherwise frameCount can be 0/NaN and decodes may stall
     // @ts-ignore

@@ -27,6 +27,8 @@ export default defineConfig(({ mode }) => ({
         // Use ESM build instead of UMD for proper import() support
         { src: 'node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.js', dest: 'public/ffmpeg' },
         { src: 'node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.wasm', dest: 'public/ffmpeg' },
+        // Copy COI service worker locally
+        { src: 'node_modules/coi-serviceworker/coi-serviceworker.min.js', dest: 'public' },
       ],
       verbose: true,
     }),

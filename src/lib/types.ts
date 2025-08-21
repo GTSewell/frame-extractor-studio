@@ -8,6 +8,7 @@ export interface FileMetadata {
   codec?: string;
   size: number;
   name: string;
+  trueType?: string;
 }
 
 export interface SplitExport {

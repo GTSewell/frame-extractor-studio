@@ -119,6 +119,12 @@ function buildCmd(inputName: string, settings: ExtractionSettings, outExt: 'png'
 async function extractFrames(file: File, settings: ExtractionSettings, metadata?: FileMetadata) {
   if (!ffmpeg || !ready) throw new Error('FFmpeg not ready')
 
+  // Short-circuit on WebP with helpful error
+  const tt = (metadata?.trueType || file.type || '').toLowerCase();
+  if (tt === 'image/webp') {
+    throw new Error('Animated WebP is not reliably supported in this FFmpeg.wasm build. Use the ImageDecoder engine for WebP.');
+  }
+
   cancelled = false
   const ext = (file.name.split('.').pop() || 'mp4').toLowerCase()
   const inputName = `input.${ext}`

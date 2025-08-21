@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { FileMetadata } from '@/lib/types';
 import { PrintSizeDisplay } from './PrintSizeDisplay';
+import { sniffTrueType } from '@/lib/sniff';
 
 interface VideoPreviewProps {
   file: File;
@@ -27,26 +28,24 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
     const videoUrl = URL.createObjectURL(file);
     setUrl(videoUrl);
     
-    // Enhanced GIF/APNG detection
-    const fileName = file.name.toLowerCase();
-    const isGifFile = fileName.endsWith('.gif') || file.type === 'image/gif';
-    const isApngFile = fileName.endsWith('.apng') || fileName.endsWith('.png');
-    
-    console.log('[VideoPreview] File detection:', { isGifFile, isApngFile, fileName, mimeType: file.type });
-    
-    setIsGif(isGifFile || isApngFile);
-    
-    // For GIF/APNG files, don't call onMetadataLoad here, wait for handleImageLoad
+    // Detect true file type
+    sniffTrueType(file).then(trueType => {
+      console.log('[VideoPreview] File detection:', { trueType, fileName: file.name, mimeType: file.type });
+      
+      const isImageFile = trueType === 'image/gif' || trueType === 'image/apng' || trueType === 'image/png' || trueType === 'image/webp';
+      setIsGif(isImageFile);
+    });
 
     return () => {
       URL.revokeObjectURL(videoUrl);
     };
   }, [file]);
 
-  const handleLoadedMetadata = () => {
+  const handleLoadedMetadata = async () => {
     const video = videoRef.current;
     if (!video) return;
 
+    const trueType = await sniffTrueType(file);
     const extractedMetadata: FileMetadata = {
       duration: video.duration,
       width: video.videoWidth,
@@ -54,27 +53,30 @@ export function VideoPreview({ file, metadata, onMetadataLoad }: VideoPreviewPro
       fps: undefined, // Will be estimated later if needed
       codec: undefined,
       size: file.size,
-      name: file.name
+      name: file.name,
+      trueType
     };
 
     setDuration(video.duration);
     onMetadataLoad?.(extractedMetadata);
   };
 
-  const handleImageLoad = () => {
+  const handleImageLoad = async () => {
     const img = imgRef.current;
     if (!img) return;
     
     console.log('[VideoPreview] Image loaded, extracting metadata');
     
+    const trueType = await sniffTrueType(file);
     const extractedMetadata: FileMetadata = {
       duration: 0, // GIFs don't have a reliable duration in the browser
       width: img.naturalWidth,
       height: img.naturalHeight,
-      fps: file.name.toLowerCase().endsWith('.gif') ? 10 : 24,
+      fps: trueType === 'image/gif' ? 10 : 24,
       codec: undefined,
       size: file.size,
-      name: file.name
+      name: file.name,
+      trueType
     };
     
     console.log('[VideoPreview] Image metadata extracted:', extractedMetadata);

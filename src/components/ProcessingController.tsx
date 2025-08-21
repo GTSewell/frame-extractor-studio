@@ -79,7 +79,24 @@ export function ProcessingController({
         const caps = await detectProcessingCapabilities(file, metadata);
         setCapabilities(caps);
         
-        const engine = await selectOptimalEngine(file, settings, metadata);
+        // Handle auto selection with true type routing
+        let engine: ProcessingEngine;
+        
+        if (settings.processingMode === 'auto') {
+          const tt = metadata?.trueType || file.type;
+          if (tt === 'image/webp' || tt === 'image/gif' || tt === 'image/apng' || tt === 'image/png') {
+            engine = 'image-decoder';
+          } else if (tt === 'video/mp4' || tt === 'video/webm') {
+            engine = 'ffmpeg';
+          } else if (file.type.startsWith('image/')) {
+            engine = 'image-decoder';
+          } else {
+            engine = 'ffmpeg';
+          }
+        } else {
+          engine = await selectOptimalEngine(file, settings, metadata);
+        }
+        
         setSelectedEngine(engine);
         
         setEngineStatus('ready');
@@ -203,19 +220,23 @@ export function ProcessingController({
           break;
 
         case 'ERROR':
-          // Auto-fallback for ImageDecoder errors
+          // Auto-fallback for ImageDecoder errors (only for certain file types)
           if (selectedEngine === 'image-decoder' && file) {
-            toast({
-              title: 'ImageDecoder issue',
-              description: `${event.data.error}. Falling back to FFmpeg...`
-            });
+            const tt = metadata?.trueType || file?.type || '';
+            const allowFallback = tt !== 'image/webp' && tt !== 'image/gif' && tt !== 'image/apng';
             
-            // Terminate current worker
-            newWorker.terminate();
-            
-            // Create FFmpeg worker as fallback
-            const fallbackWorker = new FfmpegWorker();
-            setSelectedEngine('ffmpeg');
+            if (allowFallback) {
+              toast({
+                title: 'ImageDecoder Error',
+                description: `${event.data.error}. Falling back to FFmpeg...`
+              });
+              
+              // Terminate current worker
+              newWorker.terminate();
+              
+              // Create FFmpeg worker as fallback
+              const fallbackWorker = new FfmpegWorker();
+              setSelectedEngine('ffmpeg');
             
             fallbackWorker.onmessage = (fallbackEvent: MessageEvent<WorkerOutMessage>) => {
               // Handle FFmpeg worker messages with same logic as above
@@ -259,8 +280,16 @@ export function ProcessingController({
               }
             };
             
-            setWorker(fallbackWorker);
-            return;
+              setWorker(fallbackWorker);
+              return;
+            } else {
+              toast({
+                title: 'ImageDecoder Error',
+                description: event.data.error,
+                variant: 'destructive'
+              });
+              setEngineStatus('error');
+            }
           }
           
           setEngineStatus('error');
@@ -312,8 +341,11 @@ export function ProcessingController({
       setParts([]);
 
       if (selectedEngine === 'image-decoder') {
-        // Add first-frame watchdog for ImageDecoder
-        const firstFrameTimer = setTimeout(() => {
+        // Add first-frame watchdog for ImageDecoder (only for certain file types)
+        const tt = metadata?.trueType || file?.type || '';
+        const allowTimerFallback = tt !== 'image/webp' && tt !== 'image/gif' && tt !== 'image/apng';
+        
+        const firstFrameTimer = allowTimerFallback ? setTimeout(() => {
           toast({
             title: 'Slow decoder',
             description: 'Switching to FFmpeg for this file.'
@@ -365,12 +397,12 @@ export function ProcessingController({
           };
           
           setWorker(fallbackWorker);
-        }, 6000);
+        }, 6000) : null;
 
         // Clear timer when first frame arrives
         const originalOnMessage = worker.onmessage;
         worker.onmessage = (event) => {
-          if (event.data?.type === 'FRAME') {
+          if (event.data?.type === 'FRAME' && firstFrameTimer) {
             clearTimeout(firstFrameTimer);
           }
           if (originalOnMessage) {
@@ -381,7 +413,7 @@ export function ProcessingController({
         worker.postMessage({
           type: 'EXTRACT_IMGDEC',
           file,
-          settings,
+          settings: { ...settings, _forceType: metadata?.trueType },
           metadata
         });
       } else {
