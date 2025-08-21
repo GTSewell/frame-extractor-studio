@@ -96,7 +96,8 @@ export const SUPPORTED_FORMATS = {
   'video/webm': ['.webm'],
   'image/gif': ['.gif'],
   'image/apng': ['.apng'],
-  'image/png': ['.png'] // for APNG detection
+  'image/png': ['.png'], // for APNG detection
+  'image/webp': ['.webp']
 } as const;
 
 export const DEFAULT_SETTINGS: ExtractionSettings = {

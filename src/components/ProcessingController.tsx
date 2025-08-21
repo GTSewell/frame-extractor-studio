@@ -419,12 +419,15 @@ export function ProcessingController({
     abortRef.current = new AbortController();
 
     const out = settings.outputFormat?.type === 'jpeg' ? 'jpg' : 'png';
+    const isCompressed = settings.outputFormat?.type === 'png-compressed';
+    
     try {
       const total = await extractAnimatedImageOnMain({
         file,
         typeHint: metadata.trueType || file.type,
         nameBase: (metadata.name || file.name).replace(/\.[^.]+$/, ''),
         out,
+        compressed: isCompressed,
         jpgQuality: (settings.outputFormat?.quality ?? 92) / 100,
         fpsHint: metadata.fps ?? 10,
         signal: abortRef.current.signal,

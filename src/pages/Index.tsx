@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { FileDropzone } from '@/components/FileDropzone';
+import { UrlInput } from '@/components/UrlInput';
 import { VideoPreview } from '@/components/VideoPreview';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { ExtractionEngine } from '@/components/ExtractionEngine';
@@ -159,15 +160,19 @@ export default function Index() {
               Extract frames at size
             </h2>
             <p className="text-xl text-muted-foreground leading-relaxed">
-              Fast, privacy-first frame extraction from MP4, WebM, GIF, and APNG files. 
+              Fast, privacy-first frame extraction from MP4, WebM, GIF, WebP, and APNG files. 
               All processing happens locally in your browser.
             </p>
           </section>
 
           {/* Upload Section */}
-          <section className="max-w-4xl mx-auto">
+          <section className="max-w-4xl mx-auto space-y-4">
             <FileDropzone 
               onFileSelect={handleFileSelect}
+              disabled={false}
+            />
+            <UrlInput 
+              onFileFromUrl={handleFileSelect}
               disabled={false}
             />
           </section>
@@ -263,7 +268,7 @@ export default function Index() {
                   </div>
                   <h3 className="text-title mb-2 text-lg">Multiple Formats</h3>
                   <p className="text-muted-foreground">
-                    Supports MP4, WebM, GIF, and APNG with intelligent frame detection.
+                    Supports MP4, WebM, GIF, WebP, and APNG with intelligent frame detection.
                   </p>
                 </Card>
               </div>

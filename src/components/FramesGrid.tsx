@@ -148,6 +148,17 @@ export function FramesGrid({ frames, onDownloadSelected, onDownloadAll }: Frames
                   alt={`Frame ${frame.index}`}
                   className="w-full h-full object-cover"
                   loading="lazy"
+                  onError={(e) => {
+                    console.error('Failed to load frame image:', frame.filename, frame.url);
+                    const target = e.target as HTMLImageElement;
+                    target.style.display = 'none';
+                    target.parentElement?.appendChild(
+                      Object.assign(document.createElement('div'), {
+                        className: 'w-full h-full flex items-center justify-center bg-muted text-muted-foreground text-xs',
+                        textContent: 'Failed to load'
+                      })
+                    );
+                  }}
                 />
                 
                 {/* Hover Overlay */}

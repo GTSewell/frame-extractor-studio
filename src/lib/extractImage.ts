@@ -3,6 +3,7 @@ export type ImgExtractOpts = {
   typeHint?: string;                     // e.g. "image/gif" / "image/webp" / "image/apng"
   nameBase?: string;                     // prefix for filenames
   out: 'png' | 'jpg';
+  compressed?: boolean;                  // for PNG compression
   jpgQuality?: number;                   // 0..1 (only used for jpg)
   fpsHint?: number;                      // used for timestamp estimation
   onFrame: (index: number, blob: Blob, filename: string, ms: number) => void;
@@ -77,10 +78,58 @@ export async function extractAnimatedImageOnMain(opts: ImgExtractOpts): Promise<
     ctx.drawImage(image, 0, 0);
     try { (image as any).close?.(); } catch {}
 
-    const blob: Blob = await new Promise((resolve, reject) => {
-      if (out === 'jpg') canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), mime, jpgQuality);
-      else canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), mime);
-    });
+    let blob: Blob;
+    if (out === 'jpg') {
+      blob = await new Promise((resolve, reject) => {
+        canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), mime, jpgQuality);
+      });
+    } else {
+      // For PNG, check if it's compressed format
+      const isCompressed = opts.compressed;
+      if (isCompressed) {
+        // Create compressed PNG by scaling and using JPEG compression then converting back
+        const compressCanvas = document.createElement('canvas');
+        const compressedSize = Math.min(w, h, 512); // Limit size for compression
+        const scale = compressedSize / Math.max(w, h);
+        compressCanvas.width = Math.round(w * scale);
+        compressCanvas.height = Math.round(h * scale);
+        const compressCtx = compressCanvas.getContext('2d');
+        if (compressCtx) {
+          compressCtx.imageSmoothingEnabled = true;
+          compressCtx.imageSmoothingQuality = 'medium';
+          compressCtx.drawImage(canvas, 0, 0, compressCanvas.width, compressCanvas.height);
+          
+          // Convert to JPEG for compression, then back to PNG
+          const tempJpeg = await new Promise<Blob>((resolve, reject) => {
+            compressCanvas.toBlob(b => b ? resolve(b) : reject(new Error('temp jpeg failed')), 'image/jpeg', 0.3);
+          });
+          
+          // Load compressed JPEG and convert to PNG
+          const img = new Image();
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
+            img.src = URL.createObjectURL(tempJpeg);
+          });
+          
+          compressCtx.clearRect(0, 0, compressCanvas.width, compressCanvas.height);
+          compressCtx.drawImage(img, 0, 0);
+          URL.revokeObjectURL(img.src);
+          
+          blob = await new Promise((resolve, reject) => {
+            compressCanvas.toBlob(b => b ? resolve(b) : reject(new Error('compressed png failed')), mime);
+          });
+        } else {
+          blob = await new Promise((resolve, reject) => {
+            canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), mime);
+          });
+        }
+      } else {
+        blob = await new Promise((resolve, reject) => {
+          canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), mime);
+        });
+      }
+    }
 
     const ms = Math.round((i / (fpsHint || 10)) * 1000);
     const filename = `${base}_f${String(i).padStart(6, '0')}.${out}`;
