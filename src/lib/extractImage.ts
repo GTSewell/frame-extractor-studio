@@ -42,9 +42,23 @@ export async function extractAnimatedImageOnMain(opts: ImgExtractOpts): Promise<
 
   if (!count || count < 1) throw new Error('No frames detected');
 
-  const w = (track as any)?.frameSize?.width || (track as any)?.displayWidth || 0;
-  const h = (track as any)?.frameSize?.height || (track as any)?.displayHeight || 0;
-  if (!w || !h) throw new Error('Could not determine frame size');
+  // Try to get frame size from track or decode first frame to get dimensions
+  let w = (track as any)?.frameSize?.width || (track as any)?.displayWidth || 0;
+  let h = (track as any)?.frameSize?.height || (track as any)?.displayHeight || 0;
+  
+  // If we can't get dimensions from track, decode first frame to get them
+  if (!w || !h) {
+    try {
+      const { image } = await (dec as any).decode({ frameIndex: 0, completeFramesOnly: true });
+      w = image.displayWidth || image.width;
+      h = image.displayHeight || image.height;
+      try { (image as any).close?.(); } catch {}
+    } catch (e) {
+      throw new Error(`Could not determine frame size: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  
+  if (!w || !h) throw new Error('Could not determine frame size from track or first frame');
 
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
