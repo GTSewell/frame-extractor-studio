@@ -13,7 +13,6 @@ import { useDownloadZip } from '@/components/DownloadZip';
 import EstimateNotice from '@/components/EstimateNotice';
 import { Info, Shield, Github } from 'lucide-react';
 import { FileMetadata, ExtractionSettings, DEFAULT_SETTINGS, ExtractedFrame, ExtractionProgress } from '@/lib/types';
-
 export default function Index() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [metadata, setMetadata] = useState<FileMetadata>();
@@ -25,8 +24,9 @@ export default function Index() {
     percent: 0,
     status: 'idle'
   });
-  const { createZip } = useDownloadZip();
-
+  const {
+    createZip
+  } = useDownloadZip();
   const handleFileSelect = (file: File) => {
     setSelectedFile(file);
     setMetadata(undefined);
@@ -35,21 +35,21 @@ export default function Index() {
     // Reset extracted frames when new file is uploaded
     setExtractedFrames([]);
     // Reset extraction progress
-    setExtractionProgress({ frames: 0, percent: 0, status: 'idle' });
+    setExtractionProgress({
+      frames: 0,
+      percent: 0,
+      status: 'idle'
+    });
   };
-
   const handleMetadataLoad = (meta: FileMetadata) => {
     console.log('[Index] Metadata loaded:', meta);
     setMetadata(meta);
-    
+
     // Check if this is a GIF/APNG file
-    const isGifFile = selectedFile?.name.toLowerCase().endsWith('.gif') || 
-                     selectedFile?.name.toLowerCase().endsWith('.apng') ||
-                     selectedFile?.type === 'image/gif';
-    
+    const isGifFile = selectedFile?.name.toLowerCase().endsWith('.gif') || selectedFile?.name.toLowerCase().endsWith('.apng') || selectedFile?.type === 'image/gif';
+
     // Frame estimation based on file type and mode
     let frameCount = 0;
-    
     if (isGifFile) {
       // For GIFs, estimate frames differently since duration might be 0
       if (settings.mode === 'every') {
@@ -65,7 +65,7 @@ export default function Index() {
       // For videos, use duration-based calculation
       const duration = meta.duration || 1; // Fallback to 1 second if duration is 0
       const fps = meta.fps || 24; // Fallback to 24 FPS
-      
+
       if (settings.mode === 'every') {
         frameCount = Math.floor(duration * fps);
       } else if (settings.mode === 'fps' && settings.fps) {
@@ -80,34 +80,27 @@ export default function Index() {
         frameCount = Math.floor(rangeDuration * fps);
       }
     }
-    
     const estimatedCount = Math.min(Math.max(frameCount, 1), settings.maxFrames);
     console.log('[Index] Estimated frames:', estimatedCount, 'for file type:', isGifFile ? 'GIF' : 'VIDEO');
     setEstimatedFrames(estimatedCount);
   };
-
   const handleFramesExtracted = (frames: ExtractedFrame[]) => {
     setExtractedFrames(frames);
   };
-
   const handleProgressUpdate = (progress: ExtractionProgress) => {
     setExtractionProgress(progress);
   };
-
   const handleDownloadAll = () => {
     if (extractedFrames.length === 0 || !selectedFile) return;
     const basename = selectedFile.name.split('.')[0];
     createZip(extractedFrames, basename, metadata);
   };
-
   const handleDownloadSelected = (frames: ExtractedFrame[]) => {
     if (frames.length === 0 || !selectedFile) return;
     const basename = selectedFile.name.split('.')[0];
     createZip(frames, basename, metadata);
   };
-
-  return (
-    <div className="min-h-screen bg-background">
+  return <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b border-border bg-surface/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4">
@@ -134,21 +127,8 @@ export default function Index() {
                   Privacy
                 </Link>
               </Button>
-              <Button 
-                asChild 
-                variant="outline" 
-                size="sm"
-                className="hidden sm:flex"
-              >
-                <a 
-                  href="https://github.com" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2"
-                >
-                  <Github size={16} />
-                  GitHub
-                </a>
+              <Button asChild variant="outline" size="sm" className="hidden sm:flex">
+                
               </Button>
             </nav>
           </div>
@@ -171,73 +151,40 @@ export default function Index() {
 
           {/* Upload Section */}
           <section className="max-w-4xl mx-auto space-y-4">
-            <FileDropzone 
-              onFileSelect={handleFileSelect}
-              disabled={false}
-            />
-            <UrlInput 
-              onFileFromUrl={handleFileSelect}
-              disabled={false}
-            />
+            <FileDropzone onFileSelect={handleFileSelect} disabled={false} />
+            <UrlInput onFileFromUrl={handleFileSelect} disabled={false} />
           </section>
 
           {/* Preview and Settings */}
-          {selectedFile && (
-            <div className="grid lg:grid-cols-2 gap-8 max-w-7xl mx-auto">
+          {selectedFile && <div className="grid lg:grid-cols-2 gap-8 max-w-7xl mx-auto">
               {/* Preview */}
               <div className="space-y-6">
                 <div>
                   <h3 className="text-title mb-4">Preview</h3>
-                  <VideoPreview
-                    file={selectedFile}
-                    metadata={metadata}
-                    onMetadataLoad={handleMetadataLoad}
-                  />
+                  <VideoPreview file={selectedFile} metadata={metadata} onMetadataLoad={handleMetadataLoad} />
                 </div>
               </div>
 
               {/* Settings */}
               <div className="space-y-6">
-                <SettingsPanel
-                  settings={settings}
-                  onSettingsChange={setSettings}
-                  metadata={metadata}
-                  estimatedFrames={estimatedFrames}
-                  estimatedSize={estimatedFrames * 1024 * 512} // Rough estimate
-                />
+                <SettingsPanel settings={settings} onSettingsChange={setSettings} metadata={metadata} estimatedFrames={estimatedFrames} estimatedSize={estimatedFrames * 1024 * 512} // Rough estimate
+            />
 
                 {/* Estimate Notice */}
-                <EstimateNotice
-                  metadata={metadata}
-                  settings={settings}
-                />
+                <EstimateNotice metadata={metadata} settings={settings} />
 
                 {/* Extraction Engine */}
-                <ExtractionEngine
-                  file={selectedFile}
-                  metadata={metadata}
-                  settings={settings}
-                  onFramesExtracted={handleFramesExtracted}
-                  onProgressUpdate={handleProgressUpdate}
-                />
+                <ExtractionEngine file={selectedFile} metadata={metadata} settings={settings} onFramesExtracted={handleFramesExtracted} onProgressUpdate={handleProgressUpdate} />
               </div>
-            </div>
-          )}
+            </div>}
 
           {/* Extracted Frames Grid */}
-          {extractedFrames.length > 0 && (
-            <section className="max-w-7xl mx-auto">
-              <FramesGrid
-                frames={extractedFrames}
-                onDownloadSelected={handleDownloadSelected}
-                onDownloadAll={handleDownloadAll}
-              />
-            </section>
-          )}
+          {extractedFrames.length > 0 && <section className="max-w-7xl mx-auto">
+              <FramesGrid frames={extractedFrames} onDownloadSelected={handleDownloadSelected} onDownloadAll={handleDownloadAll} />
+            </section>}
 
           {/* Features */}
-          {!selectedFile && (
-            <section className="max-w-4xl mx-auto">
+          {!selectedFile && <section className="max-w-4xl mx-auto">
               <div className="grid md:grid-cols-3 gap-6">
                 <Card className="p-6 text-center">
                   <div className="w-12 h-12 bg-brand/10 rounded-lg flex items-center justify-center mx-auto mb-4">
@@ -276,8 +223,7 @@ export default function Index() {
                   </p>
                 </Card>
               </div>
-            </section>
-          )}
+            </section>}
         </div>
       </main>
 
@@ -295,18 +241,12 @@ export default function Index() {
               <Link to="/privacy" className="text-muted-foreground hover:text-foreground transition-colors">
                 Privacy
               </Link>
-              <a 
-                href="https://github.com" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="text-muted-foreground hover:text-foreground transition-colors"
-              >
+              <a href="https://github.com" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors">
                 GitHub
               </a>
             </div>
           </div>
         </div>
       </footer>
-    </div>
-  );
+    </div>;
 }
