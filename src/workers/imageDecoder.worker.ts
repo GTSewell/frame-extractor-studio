@@ -10,9 +10,17 @@ type OutMsg =
   | { type: 'COMPLETE'; totalFrames: number }
   | { type: 'ERROR'; error: string };
 
+// Post any crash back to main thread so UI can fallback
+self.addEventListener('error', (e) => {
+  (postMessage as any)({ type: 'ERROR', error: `ImageDecoder worker crashed: ${e.message || 'Unknown error'}` });
+});
+self.addEventListener('unhandledrejection', (e: any) => {
+  (postMessage as any)({ type: 'ERROR', error: `ImageDecoder unhandled rejection: ${e?.reason?.message || String(e?.reason || e)}` });
+});
+
 (postMessage as any)({ type: 'ID_READY' } as OutMsg);
 
-// Route unhandled errors back to UI
+// Route unhandled errors back to UI (legacy handlers)
 self.onerror = (e: any) => (postMessage as any)({ type: 'ERROR', error: e?.message || String(e) });
 self.onunhandledrejection = (e: any) => (postMessage as any)({ type: 'ERROR', error: e?.reason?.message || String(e?.reason || e) });
 
@@ -58,7 +66,7 @@ onmessage = async (evt: MessageEvent<InMsg>) => {
       // @ts-ignore
       decoder.close?.();
       // @ts-ignore
-      const d2 = new ImageDecoder({ data: buf, type: mime });
+      const d2 = new ImageDecoder({ data: buf, type: hintedType });
       // @ts-ignore
       await d2.tracks?.ready?.catch?.(() => {});
       // @ts-ignore

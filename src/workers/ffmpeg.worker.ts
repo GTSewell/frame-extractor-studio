@@ -122,7 +122,7 @@ async function extractFrames(file: File, settings: ExtractionSettings, metadata?
   // Short-circuit on WebP with helpful error
   const tt = (metadata?.trueType || file.type || '').toLowerCase();
   if (tt === 'image/webp') {
-    throw new Error('Animated WebP is not reliably supported in this FFmpeg.wasm build. Use the ImageDecoder engine for WebP.');
+    throw new Error('Animated WebP should be processed with ImageDecoder (fast). FFmpeg wasm often fails on ANIM/ANMF.');
   }
 
   cancelled = false

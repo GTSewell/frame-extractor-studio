@@ -302,14 +302,87 @@ export function ProcessingController({
       }
     };
 
-    newWorker.onerror = (error) => {
-      console.error('Worker error:', error);
-      setEngineStatus('error');
-      toast({
-        title: "Worker Error",
-        description: `${getEngineDisplayName(selectedEngine)} worker failed to initialize`,
-        variant: "destructive",
-      });
+    newWorker.onerror = (evt) => {
+      // Never just log Event; fallback immediately with a clear reason
+      if (selectedEngine === 'image-decoder') {
+        toast({ 
+          title: 'ImageDecoder crashed', 
+          description: 'Falling back to FFmpeg…', 
+          variant: 'destructive' 
+        });
+        newWorker.terminate();
+        
+        // Create FFmpeg worker as fallback
+        const fallbackWorker = new FfmpegWorker();
+        setSelectedEngine('ffmpeg');
+        
+        fallbackWorker.onmessage = (fallbackEvent: MessageEvent<WorkerOutMessage>) => {
+          const { type: fallbackType } = fallbackEvent.data;
+          
+          switch (fallbackType) {
+            case 'ALIVE':
+              fallbackWorker.postMessage({ type: 'INIT', basePath } as WorkerInMessage);
+              break;
+            case 'FFMPEG_READY':
+              fallbackWorker.postMessage({
+                type: 'EXTRACT',
+                file,
+                settings,
+                metadata
+              } as WorkerInMessage);
+              break;
+            case 'PROGRESS':
+              onProgressUpdate?.((fallbackEvent.data as any).progress);
+              break;
+            case 'PART_READY':
+              const partData = fallbackEvent.data as PartReady;
+              const partUrl = URL.createObjectURL(partData.zip);
+              
+              const newPart = {
+                partIndex: partData.partIndex,
+                totalParts: partData.totalParts,
+                startFrame: partData.startFrame,
+                endFrame: partData.endFrame,
+                filename: partData.filename,
+                blob: partData.zip,
+                url: partUrl
+              };
+              
+              setParts(prev => {
+                const updated = [...prev, newPart];
+                onPartsReady?.(updated);
+                return updated;
+              });
+              break;
+            case 'COMPLETE':
+              setEngineStatus('ready');
+              onFramesExtracted?.(frames);
+              toast({
+                title: "Extraction Complete!",
+                description: `Successfully extracted ${(fallbackEvent.data as any).totalFrames} frames using FFmpeg fallback`,
+              });
+              break;
+            case 'ERROR':
+              setEngineStatus('error');
+              toast({
+                title: "Processing Failed",
+                description: `FFmpeg fallback error: ${(fallbackEvent.data as any).error}`,
+                variant: "destructive",
+              });
+              break;
+          }
+        };
+        
+        setWorker(fallbackWorker);
+      } else {
+        console.error('Worker error:', evt);
+        setEngineStatus('error');
+        toast({
+          title: "Worker Error",
+          description: `${getEngineDisplayName(selectedEngine)} worker failed to initialize`,
+          variant: "destructive",
+        });
+      }
     };
 
     setWorker(newWorker);
@@ -341,9 +414,9 @@ export function ProcessingController({
       setParts([]);
 
       if (selectedEngine === 'image-decoder') {
-        // Add first-frame watchdog for ImageDecoder (only for certain file types)
+        // No timer fallback for image animations - let them process through ImageDecoder
         const tt = metadata?.trueType || file?.type || '';
-        const allowTimerFallback = tt !== 'image/webp' && tt !== 'image/gif' && tt !== 'image/apng';
+        const allowTimerFallback = false; // Never timer-fallback for animations
         
         const firstFrameTimer = allowTimerFallback ? setTimeout(() => {
           toast({
