@@ -32,6 +32,10 @@ export default function Index() {
     setMetadata(undefined);
     // Reset estimation when new file is selected
     setEstimatedFrames(0);
+    // Reset extracted frames when new file is uploaded
+    setExtractedFrames([]);
+    // Reset extraction progress
+    setExtractionProgress({ frames: 0, percent: 0, status: 'idle' });
   };
 
   const handleMetadataLoad = (meta: FileMetadata) => {

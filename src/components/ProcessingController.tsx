@@ -551,6 +551,12 @@ export function ProcessingController({
   const startExtraction = async () => {
     if (!file || !metadata) return;
 
+    // Reset frames at the start of any extraction
+    setFrames([]);
+    setParts([]);
+    onFramesExtracted?.([]);
+    onProgressUpdate?.({ frames: 0, percent: 0, status: 'processing' });
+
     try {
       const tt = metadata.trueType || file.type;
       if (tt.startsWith('image/')) {
