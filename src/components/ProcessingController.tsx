@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { AlertCircle, Zap, Cpu, Wrench } from 'lucide-react';
 import type { 
@@ -18,6 +18,7 @@ import {
   type ProcessingEngine 
 } from '@/lib/processingMode';
 import { useToast } from '@/hooks/use-toast';
+import { extractAnimatedImageOnMain } from '@/lib/extractImage';
 import FfmpegWorker from '@/workers/ffmpeg.worker?worker';
 import ImageDecoderWorker from '@/workers/imageDecoder.worker?worker';
 import WebCodecsWorker from '@/workers/webcodecs.worker?worker';
@@ -61,6 +62,9 @@ export function ProcessingController({
     blob: Blob;
     url: string;
   }>>([]);
+  const [usingEngine, setUsingEngine] = useState<'imgdec'|'ffmpeg'|null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const ffmpegRef = useRef<Worker | null>(null);
   
   const { toast } = useToast();
   const basePath = `${window.location.origin}${(import.meta as any).env?.BASE_URL ?? '/'}`.replace(/\/$/, '') + '/ffmpeg';
@@ -405,99 +409,152 @@ export function ProcessingController({
     };
   }, [selectedEngine, engineStatus, file]);
 
+  const startImageOnMain = async (file: File, settings: ExtractionSettings, metadata: FileMetadata) => {
+    setUsingEngine('imgdec');
+    setEngineStatus('processing');
+    setFrames([]);
+    setParts([]);
+    onProgressUpdate?.({ frames: 0, percent: 0, status: 'processing' });
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+
+    const out = settings.outputFormat?.type === 'jpeg' ? 'jpg' : 'png';
+    try {
+      const total = await extractAnimatedImageOnMain({
+        file,
+        typeHint: metadata.trueType || file.type,
+        nameBase: (metadata.name || file.name).replace(/\.[^.]+$/, ''),
+        out,
+        jpgQuality: (settings.outputFormat?.quality ?? 92) / 100,
+        fpsHint: metadata.fps ?? 10,
+        signal: abortRef.current.signal,
+        onFrame: (i, blob, filename, ms) => {
+          const url = URL.createObjectURL(blob);
+          const frame = { index: i, filename, timestamp: ms, blob, url };
+          setFrames(prev => [...prev, frame]);
+        },
+        onProgress: (done, total) => {
+          onProgressUpdate?.({ frames: done, percent: Math.round((done/total)*100), status: 'processing' });
+        },
+      });
+      
+      setEngineStatus('ready');
+      onProgressUpdate?.({ frames: total, percent: 100, status: 'complete' });
+      onFramesExtracted?.(frames);
+      
+      toast({
+        title: "Extraction Complete!",
+        description: `Successfully extracted ${total} frames using ImageDecoder`,
+      });
+    } catch (e: any) {
+      if (e?.message === 'Cancelled') return;
+      setEngineStatus('error');
+      toast({ 
+        title: 'Image decode error', 
+        description: e?.message || String(e), 
+        variant: 'destructive' 
+      });
+    }
+  };
+
+  const startFfmpeg = (file: File, settings: ExtractionSettings, metadata: FileMetadata) => {
+    setUsingEngine('ffmpeg');
+    setEngineStatus('processing');
+    setFrames([]);
+    setParts([]);
+    onProgressUpdate?.({ frames: 0, percent: 0, status: 'processing' });
+    ffmpegRef.current?.terminate();
+    const w = new FfmpegWorker();
+    ffmpegRef.current = w;
+
+    w.onmessage = (e: MessageEvent<any>) => {
+      const { type } = e.data || {};
+      if (type === 'ALIVE') {
+        w.postMessage({ type: 'INIT', basePath });
+      } else if (type === 'FFMPEG_READY') {
+        w.postMessage({ type: 'EXTRACT', file, settings, metadata });
+      } else if (type === 'PROGRESS') {
+        onProgressUpdate?.({ 
+          frames: e.data.progress?.frames ?? 0, 
+          percent: e.data.progress?.percent ?? 0, 
+          status: 'processing' 
+        });
+      } else if (type === 'FRAME') {
+        const url = URL.createObjectURL(e.data.frame.blob);
+        setFrames(prev => [...prev, { ...e.data.frame, url }]);
+      } else if (type === 'PART_READY') {
+        const partData = e.data as PartReady;
+        const partUrl = URL.createObjectURL(partData.zip);
+        
+        const newPart = {
+          partIndex: partData.partIndex,
+          totalParts: partData.totalParts,
+          startFrame: partData.startFrame,
+          endFrame: partData.endFrame,
+          filename: partData.filename,
+          blob: partData.zip,
+          url: partUrl
+        };
+        
+        setParts(prev => {
+          const updated = [...prev, newPart];
+          onPartsReady?.(updated);
+          return updated;
+        });
+
+        if (settings.split?.autoDownload !== false) {
+          const link = document.createElement('a');
+          link.href = partUrl;
+          link.download = partData.filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+
+        toast({
+          title: "Part Ready",
+          description: `Part ${partData.partIndex}/${partData.totalParts} processed with FFmpeg`,
+        });
+      } else if (type === 'COMPLETE') {
+        setEngineStatus('ready');
+        onFramesExtracted?.(frames);
+        onProgressUpdate?.({ frames: e.data.totalFrames, percent: 100, status: 'complete' });
+        toast({
+          title: "Extraction Complete!",
+          description: `Successfully extracted ${(e.data as any).totalFrames} frames using FFmpeg`,
+        });
+      } else if (type === 'ERROR') {
+        setEngineStatus('error');
+        toast({ 
+          title: 'FFmpeg error', 
+          description: e.data.error, 
+          variant: 'destructive' 
+        });
+      }
+    };
+
+    w.onerror = (evt) => {
+      setEngineStatus('error');
+      toast({ 
+        title: 'FFmpeg worker crashed', 
+        description: 'See console for details', 
+        variant: 'destructive' 
+      });
+    };
+
+    setWorker(w);
+  };
+
   const startExtraction = async () => {
-    if (!file || !metadata || !worker) return;
+    if (!file || !metadata) return;
 
     try {
-      setEngineStatus('processing');
-      setFrames([]);
-      setParts([]);
-
-      if (selectedEngine === 'image-decoder') {
-        // No timer fallback for image animations - let them process through ImageDecoder
-        const tt = metadata?.trueType || file?.type || '';
-        const allowTimerFallback = false; // Never timer-fallback for animations
-        
-        const firstFrameTimer = allowTimerFallback ? setTimeout(() => {
-          toast({
-            title: 'Slow decoder',
-            description: 'Switching to FFmpeg for this file.'
-          });
-          worker.terminate();
-          // Create FFmpeg worker as fallback
-          const fallbackWorker = new FfmpegWorker();
-          setSelectedEngine('ffmpeg');
-          
-          fallbackWorker.onmessage = (fallbackEvent: MessageEvent<WorkerOutMessage>) => {
-            const { type: fallbackType } = fallbackEvent.data;
-            
-            switch (fallbackType) {
-              case 'ALIVE':
-                fallbackWorker.postMessage({ type: 'INIT', basePath } as WorkerInMessage);
-                break;
-              case 'FFMPEG_READY':
-                fallbackWorker.postMessage({
-                  type: 'EXTRACT',
-                  file,
-                  settings,
-                  metadata
-                } as WorkerInMessage);
-                break;
-              case 'PROGRESS':
-                onProgressUpdate?.((fallbackEvent.data as any).progress);
-                break;
-              case 'FRAME':
-                const fallbackFrame = (fallbackEvent.data as any).frame;
-                setFrames(prev => [...prev, fallbackFrame]);
-                break;
-              case 'COMPLETE':
-                setEngineStatus('ready');
-                onFramesExtracted?.(frames);
-                toast({
-                  title: "Extraction Complete!",
-                  description: `Successfully extracted ${(fallbackEvent.data as any).totalFrames} frames using FFmpeg fallback`,
-                });
-                break;
-              case 'ERROR':
-                setEngineStatus('error');
-                toast({
-                  title: "Processing Failed",
-                  description: `FFmpeg fallback error: ${(fallbackEvent.data as any).error}`,
-                  variant: "destructive",
-                });
-                break;
-            }
-          };
-          
-          setWorker(fallbackWorker);
-        }, 6000) : null;
-
-        // Clear timer when first frame arrives
-        const originalOnMessage = worker.onmessage;
-        worker.onmessage = (event) => {
-          if (event.data?.type === 'FRAME' && firstFrameTimer) {
-            clearTimeout(firstFrameTimer);
-          }
-          if (originalOnMessage) {
-            originalOnMessage.call(worker, event);
-          }
-        };
-
-        worker.postMessage({
-          type: 'EXTRACT_IMGDEC',
-          file,
-          settings: { ...settings, _forceType: metadata?.trueType },
-          metadata
-        });
+      const tt = metadata.trueType || file.type;
+      if (tt.startsWith('image/')) {
+        await startImageOnMain(file, settings, metadata);
       } else {
-        worker.postMessage({
-          type: 'EXTRACT',
-          file,
-          settings,
-          metadata
-        } as WorkerInMessage);
+        startFfmpeg(file, settings, metadata);
       }
-
     } catch (error) {
       console.error('Failed to start extraction:', error);
       setEngineStatus('error');
@@ -510,13 +567,19 @@ export function ProcessingController({
   };
 
   const cancelExtraction = () => {
+    abortRef.current?.abort();
+    ffmpegRef.current?.postMessage({ type: 'CANCEL' });
+    ffmpegRef.current?.terminate();
+    
     if (worker) {
       worker.postMessage({ type: 'CANCEL' } as WorkerInMessage);
       worker.terminate();
       setWorker(null);
     }
     
+    setFrames([]);
     setEngineStatus('ready');
+    onProgressUpdate?.({ frames: 0, percent: 0, status: 'idle' });
     
     toast({
       title: "Extraction Cancelled",
