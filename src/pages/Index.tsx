@@ -147,6 +147,9 @@ export default function Index() {
               Fast, privacy-first frame extraction from MP4, WebM, GIF, WebP, and APNG files. 
               All processing happens locally in your browser.
             </p>
+            <p className="text-sm text-muted-foreground">
+              Built by <a href="https://x.com/GTSewell" target="_blank" rel="noopener noreferrer" className="text-brand hover:text-brand/80 transition-colors">GT</a>
+            </p>
           </section>
 
           {/* Upload Section */}
